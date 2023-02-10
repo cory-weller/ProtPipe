@@ -15,22 +15,6 @@ We include a convenient wrapper script for running DIA-NN inside a pre-built sin
 4. Use the wrapper [`run-diann.sh`](src/run-diann.sh), either submitting to SLURM or running it directly.
 5. R processing TBI
 
-```bash
-# Run directly
-src/run-diann.sh \
-    --fasta infile.fasta \
-    --mzml infile.mzML \
-    --out test_output &
-
-# Submit to SLURM
-sbatch src/run-diann.sh \
-    --fasta example/uniprot-proteome_Human_UP000005640_20191105.fasta \
-    --mzml example/raw_MS_mzML/HREC_ETIS_2.mzML \
-    --out HREC_ETIS_2
-```
-
-
-
 # Installing Singularity
 
 This workflow requires that [`Singularity`](https://sylabs.io/singularity) be available, which runs natively on a Linux system. `Singularity` is containerization software that allows an entire pre-configured computing environment to be accessed--reducing installation headaches and improving reproducibility. 
@@ -40,7 +24,7 @@ This workflow requires that [`Singularity`](https://sylabs.io/singularity) be av
 To run on your personal/local non-Linux machine, Mac users need to first install a number of dependencies. Windows users would either need to use a virtual machine, or run things through the Windows Subsystem for Linux (WSL). Explaining the installation of `singularity` on these non-Linux systems is beyond the scope of this guide, so we defer to [the documentation here](https://docs.sylabs.io/guides/3.0/user-guide/installation.html).
 
 # Predicting Protein Abundances (running DIA-NN)
-
+After editing the contents of `config.txt`, or generating a new file to specify with `--config newfile.txt`:
 ```bash
 # Submit to SLURM
 sbatch src/run-diann.sh

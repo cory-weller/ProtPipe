@@ -43,18 +43,10 @@ To run on your personal/local non-Linux machine, Mac users need to first install
 
 ```bash
 # Submit to SLURM
-sbatch src/run-diann.sh \
-    --config config.txt \
-    --mzml ./example/raw_MS_mzML/HREC_ETIS_1.mzML \
-    --fasta ./example/uniprot-proteome_Human_UP000005640_20191105.fasta \
-    --out example/
+sbatch src/run-diann.sh
 
 # Run Locally
-src/run-diann.sh \
-    --config config.txt \
-    --mzml ./example/raw_MS_mzML/HREC_ETIS_1.mzML \
-    --fasta ./example/uniprot-proteome_Human_UP000005640_20191105.fasta \
-    --out example/
+src/run-diann.sh
 ```
 
 <details><summary>Re-running on generated spectral library</summary>

@@ -173,7 +173,6 @@ stop_if_dryrun() {
 # Initialization
 print_preamble                  # Print welcome banner
 check_help                      # Print help message if --help supplied
-initialize_args                 # Set starting values
 
 # Check provided inputs
 check_dry_run                   # if --dry-run provided, stop before analysis

@@ -24,10 +24,11 @@ src/run-diann.sh \
 
 # Submit to SLURM
 sbatch src/run-diann.sh \
-    --fasta infile.fasta \
-    --mzml infile.mzML \
-    --out test_output &
+    --fasta example/uniprot-proteome_Human_UP000005640_20191105.fasta \
+    --mzml example/raw_MS_mzML/HREC_ETIS_2.mzML \
+    --out HREC_ETIS_2
 ```
+
 
 
 # Installing Singularity
@@ -56,7 +57,66 @@ src/run-diann.sh \
     --out example/
 ```
 
+<details><summary>Re-running on generated spectral library</summary>
+
+For regenerating final outputs without the long computational steps. Requires the .speclib files.
+
+```
+singularity exec \
+--cleanenv -H /home/wellerca/ProtPipe ./src/diann-1.8.1.sif diann \
+--fasta example/uniprot-proteome_Human_UP000005640_20191105.fasta \
+--reannotate \
+--f example/raw_MS_mzML/HREC_ETIS_2.mzML \
+--threads 4 \
+--out-lib test \
+--qvalue 0.01 \
+--min-fr-mz 200 \
+--max-fr-mz 2000  \
+--cut K*,R* \
+--missed-cleavages 2 \
+--min-pep-len 7 \
+--max-pep-len 52 \
+--min-pr-mz 300 \
+--max-pr-mz 1800 \
+--min-pr-charge 1 \
+--max-pr-charge 4 \
+--var-mods 5 \
+--monitor-mod UniMod:1 \
+--var-mod UniMod:35,15.994915,M \
+--var-mod UniMod:1,42.010565,*n \
+--smart-profiling \
+--peak-center \
+--no-ifs-removal \
+--met-excision  \
+--matrices \
+--lib test.speclib \
+--out test
+```
+
+</details>
+
+# Subsetting mzML file for testing purposes
+from [here](https://rformassspectrometry.github.io/Spectra/articles/Spectra.html#exporting-spectra):
+```R
+# In R/4.2
+BiocInstaller::install('mzR')
+BiocInstaller::install('Spectra')
+
+library(Spectra)
+
+# load mzML using `Spectra`
+sp <- Spectra('HREC_ETIS_1.mzML')
+
+# write first 800 records using `export` and `MsBackendMzR()`
+export(sp[1:8000], MsBackendMzR(), file='test.mzML')
+```
+
 # Processing DIA Estimates
+
+# To Do
+* update R in singularity image? (as `Spectra` package requires R/4.2)
+
+
 
 
 <details><summary>extra to be changed</summary>
@@ -161,7 +221,6 @@ diann \
     --threads 24 \
     --verbose 1 \
     --out ./report.tsv \
-    --qvalue 0.01 \
     --matrices \
     --out-lib ./report-lib.tsv \
     --gen-spec-lib \

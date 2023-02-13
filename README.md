@@ -11,8 +11,8 @@ We include a convenient wrapper script for running DIA-NN inside a pre-built sin
 
 1. Ensure `singularity` is installed and accessible on your system. Many HPCs (including NIH Biowulf) come with this pre-installed as a module. If your HPC has singularity installed, it will be automatically detected and loaded when necessary.
 2. Clone this repository, i.e. `git clone https://github.com/cory-weller/ProtPipe.git`
-3. If you are predicting protein abundances from raw mass spec output, look over and edit any custom `DIA-NN` parameters inside [`config.txt`](config.txt). You can either edit `config.txt` directly (and it will be used by default), or make a copy and save it to a different file name, then reference it with `--config newfilename.txt` when running the wrapper script.
-4. Use the wrapper [`run-diann.sh`](src/run-diann.sh), either submitting to SLURM or running it directly.
+3. If you are predicting protein abundances from raw mass spec output, look over and edit any custom `DIA-NN` parameters inside [`config.txt`](config.txt). You can either edit `config.txt` directly (and it will be used by default), or make a copy and save it to a different file name, then reference it with `--cfg newfilename.txt` when running the wrapper script.
+4. Use the wrapper [`ProtPipe.sh`](src/ProtPipe.sh), either submitting to SLURM or running it directly.
 5. R processing TBI
 
 # Installing Singularity
@@ -24,7 +24,7 @@ This workflow requires that [`Singularity`](https://sylabs.io/singularity) be av
 To run on your personal/local non-Linux machine, Mac users need to first install a number of dependencies. Windows users would either need to use a virtual machine, or run things through the Windows Subsystem for Linux (WSL). Explaining the installation of `singularity` on these non-Linux systems is beyond the scope of this guide, so we defer to [the documentation here](https://docs.sylabs.io/guides/3.0/user-guide/installation.html).
 
 # Predicting Protein Abundances (running DIA-NN)
-After editing the contents of `config.txt`, or generating a new file to specify with `--config newfile.txt`:
+After editing the contents of `config.txt`, or generating a new file to specify with `--cfg newfile.txt`:
 ```bash
 # Submit to SLURM
 sbatch ./ProtPipe.sh --cfg config.txt
@@ -96,21 +96,6 @@ export(sp[1:8000], MsBackendMzR(), file='test.mzML')
 
 
 <details><summary>extra to be changed</summary>
-```bash
-# Submit to SLURM
-sbatch src/process-dia.sh \
-    --config config.txt \
-    --mzml ./example/raw_MS_mzML/HREC_ETIS_1.mzML \
-    --fasta ./example/uniprot-proteome_Human_UP000005640_20191105.fasta \
-    --out example/
-
-# Run Locally
-src/run-diann.sh \
-    --config config.txt \
-    --mzml ./example/raw_MS_mzML/HREC_ETIS_1.mzML \
-    --fasta ./example/uniprot-proteome_Human_UP000005640_20191105.fasta \
-    --out example/
-```
 
 Executing [`run.sh`](src/run.sh) runs the pipeline outlind below. Briefly, it
 1. Retrieves the required pre-built singularity image 

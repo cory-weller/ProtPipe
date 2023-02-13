@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 if __name__ == '__main__':
 
+    #### VERSION ##################################################################################
+    singularity_image = "src/diann-1.8.1.sif"
+    singularity_image_md5 = '35644c1d7217f0c65727b8fb9c8bfaae'
+    diann_version = "1.8.1"
+    singularity_version = "3.x"
+    git_repo = "https://www.github.com/cory-weller/ProtPipe"
+    authors = ['Cory Weller']
+
     #### LOGGING ###################################################################################
     import logging
     class ExitOnExceptionHandler(logging.StreamHandler):
@@ -25,23 +33,36 @@ if __name__ == '__main__':
     import os
     import sys
     import re
+    import argparse
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dry',
+                        default=False,
+                        action="store_true",
+                        help='Validate arguments and file permissions, but do not run DIA-NN')
+    parser.add_argument('--cfg', 
+                        default='config.txt',
+                        nargs='?',
+                        type=str,
+                        metavar='<config.txt>',
+                        help='File name to import DIA-NN configuration. Default: config.txt')
 
-    #### ARGS ######################################################################################
-    if len(sys.argv) < 4:
-        logger.error("ERROR: Provide config file and singularity image file")
+    args = parser.parse_args()
+
+    # if len(sys.argv) < 4:
+    #     logger.error("ERROR: Provide config file and singularity image file")
     
-    if len(sys.argv) > 4:
-        logger.error("ERROR: too many arguments given. Only specify one config file.")
+    # if len(sys.argv) > 4:
+    #     logger.error("ERROR: too many arguments given. Only specify one config file.")
     
-    if len(sys.argv) == 4:
-        config_filename = sys.argv[1]
-        logger.info(f"INFO: Using config file {config_filename}")
-        diann_sif_filename = sys.argv[2]
-        logger.info(f"INFO: Using DIA-NN singularity image file {diann_sif_filename}")
-        dryrun = sys.argv[3]
-        if dryrun:
-            logger.info("INFO: --dry-run indicated, halting after checks, but before running DIA-NN")
+    # if len(sys.argv) == 4:
+    #     config_filename = sys.argv[1]
+    #     logger.info(f"INFO: Using config file {config_filename}")
+    #     diann_sif_filename = sys.argv[2]
+    #     logger.info(f"INFO: Using DIA-NN singularity image file {diann_sif_filename}")
+    #     dryrun = sys.argv[3]
+    #     if dryrun:
+    #         logger.info("INFO: --dry-run indicated, halting after checks, but before running DIA-NN")
 
 
     #### FUNCTIONS #################################################################################
@@ -68,6 +89,13 @@ if __name__ == '__main__':
         path = '/'.join(path[:-1])
         return path
 
+    def read_config(filename, logger):
+        try:
+            with open(filename, 'r') as infile:
+                for line in infile:
+                    yield line
+        except FileNotFoundError:
+            logger.arg_errors.append(f"ERROR: config file {filename} not found")
 
     #### DEFINITIONS ###############################################################################
     collected_args = {}
@@ -201,21 +229,21 @@ if __name__ == '__main__':
     # Iterate over config_filename and collect args, logging if malformed or invalid
     # Lines commented out will be ignored
     # if 'IGNORE' is encountered, break out of loop
-    with open(config_filename, 'r') as infile:
-        for i,rawline in enumerate(infile):
-            if rawline.startswith('IGNORE'):
-                break
-            line = rawline.split('#')[0].strip('\n .-').split()
-            if len(line)==0:        # ignore blank or commented out lines
-                continue
-            if len(line) > 2:       # possibly malformed
-                logger.line_errors.append(f"  Line {i+1}: {rawline.rstrip()}")
-            argname=line[0]
-            if len(line) == 2:
-                argval=line[1]
-            else:
-                argval = None
-            collect_arguments(argname, argval, i+1, collected_args, collected_options)
+    DIA_NN_args = read_config(args.cfg, logger)
+    for i,rawline in enumerate(DIA_NN_args):
+        if rawline.startswith('IGNORE'):
+            break
+        line = rawline.split('#')[0].strip('\n .-').split()
+        if len(line)==0:        # ignore blank or commented out lines
+            continue
+        if len(line) > 2:       # possibly malformed
+            logger.line_errors.append(f"  Line {i+1}: {rawline.rstrip()}")
+        argname=line[0]
+        if len(line) == 2:
+            argval=line[1]
+        else:
+            argval = None
+        collect_arguments(argname, argval, i+1, collected_args, collected_options)
 
     # Print any errors after parsing whole config file
     if len(logger.line_errors) > 0:
@@ -242,7 +270,7 @@ if __name__ == '__main__':
         outdir = basedir(outdir)
         if not os.path.isdir(outdir):
             logger.info(f"INFO: trying to create --out directory {outdir}")
-            if not dryrun:
+            if not args.dry:
                 try: os.makedirs(outdir)
                 except PermissionError:
                     msg = f"ERROR: permission denied to create directory {outdir}"
@@ -257,16 +285,14 @@ if __name__ == '__main__':
         logger.info("INFO: No troubling errors found")
         # diann_args = format_args(collected_args, collected_options)
         #print(collected_args)
-        final_args = ['singularity', 'exec', '--cleanenv', '-H', os.getcwd(), diann_sif_filename, 'diann']
+        final_args = ['singularity', 'exec', '--cleanenv', '-H', os.getcwd(), singularity_image, 'diann']
         for key in collected_args:
             for value in collected_args[key]:
                 final_args.append(f"{key} {value}")
         for value in collected_options:
             final_args.append(value)
         logger.info('INFO: command to be called:\n'+' '.join(final_args))
-        if dryrun:
+        if args.dry:
             logger.info("INFO: Stopping before running DIA-NN because --dry-run was specified")
         else:
             subprocess.run(final_args)
-
-    

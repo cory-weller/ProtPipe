@@ -17,27 +17,34 @@ if __name__ == '__main__':
     )
     logger.arg_errors = []
     logger.line_errors = []
+    logger.permission_errors = []
 
 
-    #### ARGS ######################################################################################
+    #### MODULES ####################################################################################
     import subprocess
     import os
     import sys
-    if len(sys.argv) < 3:
+    import re
+
+
+    #### ARGS ######################################################################################
+    if len(sys.argv) < 4:
         logger.error("ERROR: Provide config file and singularity image file")
     
-    if len(sys.argv) > 3:
-        logger.info('Command given: '+' '.join(sys.argv))
+    if len(sys.argv) > 4:
         logger.error("ERROR: too many arguments given. Only specify one config file.")
     
-    if len(sys.argv) == 3:
+    if len(sys.argv) == 4:
         config_filename = sys.argv[1]
         logger.info(f"INFO: Using config file {config_filename}")
         diann_sif_filename = sys.argv[2]
         logger.info(f"INFO: Using DIA-NN singularity image file {diann_sif_filename}")
+        dryrun = sys.argv[3]
+        if dryrun:
+            logger.info("INFO: --dry-run indicated, halting after checks, but before running DIA-NN")
+
 
     #### FUNCTIONS #################################################################################
-
     def collect_arguments(arg, val, lineNo, arg_collector, option_collector):
         arg = '--'+arg
         if not (arg in valid_args or arg in valid_options):
@@ -55,15 +62,20 @@ if __name__ == '__main__':
                 logger.arg_errors.append(f"  Line {lineNo}: {arg} does not take arguments, ignoring {val}")
             elif arg not in option_collector:
                 option_collector.append(arg)
-            
+    
+    def basedir(path):
+        path = re.split(string=path, pattern='/+')
+        path = '/'.join(path[:-1])
+        return path
+
 
     #### DEFINITIONS ###############################################################################
-
     collected_args = {}
     collected_options = []
 
     valid_args = [
     '--f',
+    '--out',
     '--fasta',
     '--dir',
     '--threads',
@@ -186,6 +198,9 @@ if __name__ == '__main__':
 
     #### RUN #######################################################################################
 
+    # Iterate over config_filename and collect args, logging if malformed or invalid
+    # Lines commented out will be ignored
+    # if 'IGNORE' is encountered, break out of loop
     with open(config_filename, 'r') as infile:
         for i,rawline in enumerate(infile):
             if rawline.startswith('IGNORE'):
@@ -202,6 +217,7 @@ if __name__ == '__main__':
                 argval = None
             collect_arguments(argname, argval, i+1, collected_args, collected_options)
 
+    # Print any errors after parsing whole config file
     if len(logger.line_errors) > 0:
         print("ERROR: Check malformed lines and try again:")
         print('\n'.join(logger.line_errors)+'\n')
@@ -210,20 +226,47 @@ if __name__ == '__main__':
         print("ERROR: Check argument(s):")
         print('\n'.join(logger.arg_errors)+'\n')
 
-    if len(logger.arg_errors) > 0 or len(logger.line_errors) > 0:
-        logger.error(f"Exiting due to {len(logger.arg_errors) + len(logger.line_errors)} problem(s)")
 
-    logger.info("INFO: No troubling errors found")
-    # diann_args = format_args(collected_args, collected_options)
-    #print(collected_args)
-    final_args = ['singularity', 'exec', '--cleanenv', '-H', os.getcwd(), diann_sif_filename, 'diann']
-    for key in collected_args:
-        for value in collected_args[key]:
-            final_args.append(f"{key} {value}")
-    for value in collected_options:
-        final_args.append(value)
+    # Check output directory is writable
+    if '--out' in collected_args:
+        outdirs = collected_args['--out']   # entire list
+        outdir = outdirs[-1]                # last item in list, regardless of length
+        if len(outdirs) > 1:
+            logger.warning(f"WARNING: multiple --out arguments given. Only using {outdir}")
+            collected_args['--out'] = [outdir]
+        if not any([outdir.endswith(i) for i in ['txt','tsv']]):
+            msg = f"ERROR: --out must specify an output file ending in .txt or .tsv\n"
+            msg += f"You specified: --out {outdir}"
+            print(msg)
+            logger.permission_errors.append(msg)
+        outdir = basedir(outdir)
+        if not os.path.isdir(outdir):
+            logger.info(f"INFO: trying to create --out directory {outdir}")
+            if not dryrun:
+                try: os.makedirs(outdir)
+                except PermissionError:
+                    msg = f"ERROR: permission denied to create directory {outdir}"
+                    logger.permission_errors.append(msg)
 
-    print('Running command:\n'+' '.join(final_args))
-    subprocess.run(final_args)
+
+
+    total_errors = len(logger.arg_errors + logger.line_errors + logger.permission_errors)
+    if total_errors > 0:
+        logger.error(f"Exiting due to {total_errors} problem(s)")
+    elif total_errors == 0:
+        logger.info("INFO: No troubling errors found")
+        # diann_args = format_args(collected_args, collected_options)
+        #print(collected_args)
+        final_args = ['singularity', 'exec', '--cleanenv', '-H', os.getcwd(), diann_sif_filename, 'diann']
+        for key in collected_args:
+            for value in collected_args[key]:
+                final_args.append(f"{key} {value}")
+        for value in collected_options:
+            final_args.append(value)
+        logger.info('INFO: command to be called:\n'+' '.join(final_args))
+        if dryrun:
+            logger.info("INFO: Stopping before running DIA-NN because --dry-run was specified")
+        else:
+            subprocess.run(final_args)
 
     

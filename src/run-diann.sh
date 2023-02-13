@@ -44,6 +44,10 @@ fi
 
 BADARGS='FALSE'
 
+if [ ! -n "${DRYRUN}" ]; then
+    DRYRUN='FALSE'
+fi
+
 
 print_preamble() {
     echo -e '\n\nProtPipe: An all-in-one wrapper for DIA analysis in a singularity container'
@@ -153,16 +157,16 @@ check_clobber() {
 
 test_and_run() {
     echo -e 'INFO: validating arguments and starting DIA-NN\n'
-    python3 src/validate-args.py ${CONFIG} ${SINGULARITY_IMAGE}
+    python3 src/validate-args.py ${CONFIG} ${SINGULARITY_IMAGE} ${DRYRUN}
 }
 
-stop_if_dryrun() {
-    if [ "${DRYRUN}" == 'TRUE' ]; then
-        echo -e 'INFO: halting process before DIA-NN due to --dry-run flag\n'
-        echo -e 'Shutting down...\n'
-        exit 0
-    fi
-}
+# stop_if_dryrun() {
+#     if [ "${DRYRUN}" == 'TRUE' ]; then
+#         echo -e 'INFO: halting process before DIA-NN due to --dry-run flag\n'
+#         echo -e 'Shutting down...\n'
+#         exit 0
+#     fi
+# }
 
 
 
@@ -181,10 +185,7 @@ check_singularity_exists
 check_singularity_version
 check_singularity_image         # Pull .sif if necessary; confirm md5sum
 
-# Import run-specific configuration and prepare to start DIA-NN
-stop_if_dryrun                  # Quit before proceeding if --dry-run provided
-
 # Perform DIA-NN steps
-test_and_run                       # Build in silico library and analyze input
+test_and_run                    # validate args and run DIA-NN if checks pass; stop if dryrun
 
 exit 0

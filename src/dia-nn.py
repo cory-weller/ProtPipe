@@ -47,7 +47,7 @@ if __name__ == '__main__':
                         default='config.txt',
                         nargs='?',
                         type=str,
-                        metavar='<config.txt>',
+                        metavar='config.txt',
                         help='File name to import DIA-NN configuration. Default: config.txt')
 
     args = parser.parse_args()

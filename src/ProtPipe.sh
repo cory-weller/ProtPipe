@@ -36,3 +36,14 @@ else
 fi
 
 python3 src/dia-nn.py $@
+
+# add singularity pull for R .sif
+
+diann_r_file='src/diann_processing.R'
+folder='exampleOutput'
+singularity exec --cleanenv -H ${PWD} src/r-4.0.sif Rscript ${diann_r_file} \
+--pro_input         ${folder}/report.pg_matrix.tsv \
+--pep_input         ${folder}/report.gg_matrix.tsv \
+--prefix            test \
+--outdir            ${folder} \
+--design_matrix     example/design_matrix.csv

@@ -302,9 +302,6 @@ if __name__ == '__main__':
     if check_singularity(singularity):
         logger.info(f"INFO: Singularity version 3 good to go")
     
-    print('loading singularity')
-    subprocess.call(f"module load singularity/{singularity.version}", shell=True)
-
     if validate_sif(singularity):
         logger.info(f"INFO: singularity image passes checks")
 

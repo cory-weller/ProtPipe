@@ -2,11 +2,14 @@
 if __name__ == '__main__':
 
     #### VERSION ##################################################################################
-    singularity_image = "src/diann-1.8.1.sif"
-    singularity_image_md5 = '35644c1d7217f0c65727b8fb9c8bfaae'
-    diann_version = "1.8.1"
-    singularity_version = "3.x"
-    git_repo = "https://www.github.com/cory-weller/ProtPipe"
+    class singularity:
+        imagename = 'src/diann-1.8.1.sif'
+        library = 'library://wellerca/diann/1.8.1:0.9'
+        md5 = '35644c1d7217f0c65727b8fb9c8bfaae'
+        version = '3'
+    
+    diann_version = '1.8.1'
+    git_repo = 'https://www.github.com/cory-weller/ProtPipe'
     authors = ['Cory Weller']
 
     #### LOGGING ###################################################################################
@@ -49,21 +52,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # if len(sys.argv) < 4:
-    #     logger.error("ERROR: Provide config file and singularity image file")
-    
-    # if len(sys.argv) > 4:
-    #     logger.error("ERROR: too many arguments given. Only specify one config file.")
-    
-    # if len(sys.argv) == 4:
-    #     config_filename = sys.argv[1]
-    #     logger.info(f"INFO: Using config file {config_filename}")
-    #     diann_sif_filename = sys.argv[2]
-    #     logger.info(f"INFO: Using DIA-NN singularity image file {diann_sif_filename}")
-    #     dryrun = sys.argv[3]
-    #     if dryrun:
-    #         logger.info("INFO: --dry-run indicated, halting after checks, but before running DIA-NN")
-
 
     #### FUNCTIONS #################################################################################
     def collect_arguments(arg, val, lineNo, arg_collector, option_collector):
@@ -88,6 +76,40 @@ if __name__ == '__main__':
         path = re.split(string=path, pattern='/+')
         path = '/'.join(path[:-1])
         return path
+    
+    def check_singularity(s):
+        try:
+            subprocess.check_output(['singularity', '--version']).decode()
+        except FileNotFoundError:
+            if not f"singularity/{s.version}" in subprocess.getoutput("module spider singularity"):
+                logger.error(f"{s.version} not available as module")
+        return True
+
+    
+    def validate_sif(s):
+        if not os.path.isfile(s.imagename):
+            logger.info(f"INFO: singularity file {s.imagename} does not exist. Pulling file.")
+            pull_singularity_image(s)
+        logger.info(f"INFO: singularity file {s.imagename} found")
+        try:
+            logger.info(f"INFO: verifying {s.imagename} md5 sum")
+            md5_actual = subprocess.check_output(['md5sum', s.imagename]).decode().split()[0]
+            if md5_actual == s.md5:
+                return True
+            else:
+                msg = f"ERROR: singularity file {filename} md5 checksum failed."
+                msg += f" Try removing {filename} and trying again."
+                logger.error(msg)
+        except subprocess.CalledProcessError:
+            logger.error(f"ERROR: singularity file {filename} exists, but is not readable")
+
+    def pull_singularity_image(s):
+        cmd = ['singularity', 'pull', '--arch', 'amd64', '--name', s.imagename, s.library]
+        try:
+            subprocess.call(cmd)
+            logger.info(f"INFO: pulled singularity image {s.imagename}")
+        except subprocess.CalledProcessError as err:
+            logger.error(err)
 
     def read_config(filename, logger):
         try:
@@ -254,7 +276,6 @@ if __name__ == '__main__':
         print("ERROR: Check argument(s):")
         print('\n'.join(logger.arg_errors)+'\n')
 
-
     # Check output directory is writable
     if '--out' in collected_args:
         outdirs = collected_args['--out']   # entire list
@@ -277,15 +298,22 @@ if __name__ == '__main__':
                     logger.permission_errors.append(msg)
 
 
+    # Validate singularity
+    if check_singularity(singularity):
+        logger.info(f"INFO: Singularity version 3 good to go")
+    
+    print('loading singularity')
+    subprocess.call(f"module load singularity/{singularity.version}", shell=True)
+
+    if validate_sif(singularity):
+        logger.info(f"INFO: singularity image passes checks")
 
     total_errors = len(logger.arg_errors + logger.line_errors + logger.permission_errors)
     if total_errors > 0:
         logger.error(f"Exiting due to {total_errors} problem(s)")
     elif total_errors == 0:
         logger.info("INFO: No troubling errors found")
-        # diann_args = format_args(collected_args, collected_options)
-        #print(collected_args)
-        final_args = ['singularity', 'exec', '--cleanenv', '-H', os.getcwd(), singularity_image, 'diann']
+        final_args = ['singularity', 'exec', '--cleanenv', '-H', os.getcwd(), singularity.imagename, 'diann']
         for key in collected_args:
             for value in collected_args[key]:
                 final_args.append(f"{key} {value}")

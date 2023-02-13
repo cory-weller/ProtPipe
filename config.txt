@@ -1,7 +1,6 @@
 ## Arguments requiring values
-
---f                     example/raw_MS_mzML/HREC_ETIS_1.mzML
---f                     example/raw_MS_mzML/HREC_ETIS_2.mzML
+--f                     example/raw/HREC_ETIS_1.mzML
+--f                     example/raw/HREC_ETIS_2.mzML
 --fasta                 example/uniprot-proteome_Human_UP000005640_20191105.fasta
 --lib                   dnd.speclib
 --threads               4
@@ -32,6 +31,7 @@
 
 
 IGNORE ## Any options below this line will be ignored
+--dir example/raw/
 --reannotate
 --use-quant
 --fasta-search

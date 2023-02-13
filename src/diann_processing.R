@@ -2,53 +2,137 @@
 #R
 #proteomics analysis for DIA-NN
 #install packages and library--------------------------------------------------- 
-package_install=function(x){
-  for( i in x ){
-    #  require returns TRUE invisibly if it was able to load package
-    if( ! require( i , character.only = TRUE ) ){
-      #  If package was not able to be loaded then re-install
-      install.packages( i , dependencies = TRUE )
-      #  Load package after installing
-      require( i , character.only = TRUE )
-    }
-  }
-}
-package_install(c("ggplot2","reshape2" , "corrplot",'ggrepel', 'umap','optparse') )
-suppressPackageStartupMessages(library(ggplot2))
-suppressPackageStartupMessages(library(reshape2))
-suppressPackageStartupMessages(library(corrplot))
-suppressPackageStartupMessages(library(umap))
-suppressPackageStartupMessages(library(ggrepel))
-suppressPackageStartupMessages(library("optparse"))
+library(optparse)
+
 option_list = list( 
-  make_option("--pro_input",  default=NULL,
-              help="Input file of protein abudence"),
-  make_option("--pep_input", default=NULL,
-              help="Input file of peptide abudence"),
+  make_option("--proteingroups",  default=NULL,
+              help="Input file of protein group abundance"),
+  make_option("--genegroups", default=NULL,
+              help="Input file of gene group abudence"),
   make_option(c("-p", "--prefix"),default=NULL,
               dest="prefix", help="Prefix"),
-  make_option(c("-o", "--outdir"), dest="outdir",default="./", 
-              help="Output dir"),
-  make_option(c("-n", "--normalization"), default=NULL, 
-              help="Normalization"),
-  make_option(c("-i", "--imputation"), default="F", 
-              help="Normalization"),
-  make_option(c("--design_matrix"), default=NULL,  
-              help="Design matrix file"),
-  make_option(c("-r", "--rawdata"), help="Raw data file path")
-  
-  
+  make_option(c("-o", "--out"), dest="outdir",default="./", 
+              help="Output directory"),
+  make_option(c("-n", "--normalization"), default=FALSE, 
+              help="Normalization (NYI)"),
+  make_option(c("-i", "--imputation"), default=FALSE, 
+              help="Normalization (NYI)"),
+  make_option(c("--design"), default=NULL,  
+              help="Input file of experimental design"),
+  make_option(c("-r", "--rawdata"), help="Raw data file path WHAT DO WE MEAN")
 )
+
 opt = parse_args(OptionParser(option_list=option_list))
 
 
+library(ggplot2)
+library(data.table)
+library(corrplot)
+library(umap)
+library(ggrepel)
+
+## If not providing any args
+if(length(opt) == 4) {
+    opt <- list(proteingroups='exampleOutput/report.pg_matrix.tsv',
+                genegroups='exampleOutput/report.gg_matrix.tsv',
+                prefix='test',
+                out='testOutDir',
+                normalization=FALSE,
+                imputation=FALSE,
+                design='example/design_matrix.csv'
+                )
+}
+
+print(opt)
+
+
+identify_format <- function (DT) {
+    col_names <- colnames(DT)
+    if(col_names[1] == 'Protein.Group') {
+        return('DIANN_proteins')
+    }
+    else if(col_names[1] == 'Genes') {
+        return('DIANN_genes')
+    }
+    else if(col_names[1] == 'PG.ProteinGroups') {
+        return('Spectronaut')
+    }
+}
+
+# Within data.table `DT`, 
+# for `sdcols` specified columns, 
+# replaces all NA with `newvalue`
+replace_NAs <- function(DT, sdcols, newvalue) {
+  DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
+}
+
 #read file----------------------------------------------------------------------
 ##pro data,pep data and log2 transform pro data
-pro=read.delim(opt$pro_input)
-pro=pro[,order(colnames(pro))]
-colnames(pro)=gsub(paste0('.',gsub("/",'.',opt$rawdata)),'',colnames(pro))
-log2_pro=pro
-log2_pro[,grep('mzML',colnames(log2_pro))]=log2(log2_pro[,grep('mzML',colnames(log2_pro))]+1)
+dat.pro <- fread(opt$proteingroups)
+setnames(dat.pro, basename(colnames(dat.pro)))
+pro_format <- identify_format(dat.pro)
+
+# <Protein.Group>
+# <Protein.Ids>
+# <Protein.Names>
+# <Genes>
+# <First.Protein.Description>
+# <N Sample columns>
+
+# Spectronaut output
+# <PG.ProteinGroups>
+# <PG.Genes>
+# <PG.ProteinDescriptions>
+# <N sample columns>
+
+dat.gene <- fread(opt$genegroups)
+setnames(dat.gene, basename(colnames(dat.gene)))
+gene_format <- identify_format(dat.gene)
+# <Genes>
+# <N sample columns>
+
+spectronaut_cols <- c('PG.ProteinGroups', 'PG.Genes', 'PG.ProteinDescriptions')
+diann_pg_cols <- c('Protein.Group', 'Protein.Ids', 'Protein.Names','Genes', 'First.Protein.Description')
+diann_gg_cols <- c('Genes')
+
+
+
+# rename columns, trimming mass spec file extensions
+gg_samples <- colnames(dat.gene)[colnames(dat.gene) %like% '.mzML$|.raw$|.dia$']
+gg_samples_trimmed <- gsub('.mzML$|.mzml$|.RAW$|.raw$|.dia$|.DIA$', '', gg_samples)
+setnames(dat.gene, gg_samples, gg_samples_trimmed)
+pg_samples <- colnames(dat.pro)[colnames(dat.pro) %like% '.mzML$|.raw$|.dia$']
+pg_samples_trimmed <- gsub('.mzML$|.mzml$|.RAW$|.raw$|.dia$|.DIA$', '', pg_samples)
+setnames(dat.pro, pg_samples, pg_samples_trimmed)
+
+if(pro_format == 'DIANN_proteins') {
+    setcolorder(dat.pro, c(diann_pg_cols, sort(pg_samples_trimmed)))
+} else if(pro_format == 'Spectronaut') {
+    setcolorder(dat.pro, c(spectronaut_cols, sort(pg_samples_trimmed)))
+} else {
+    quit()
+}
+
+if(gene_format == 'DIANN_genes') {
+    setcolorder(dat.gene, c('Genes', sort(gg_samples_trimmed)))
+} else {
+    quit()
+}
+
+
+
+
+# apply log2 transformation to (value+1)
+dat.gene[, (gg_samples_trimmed) := lapply(.SD, function(x) log2(x+1)), .SDcols=gg_samples_trimmed]
+dat.pro[, (pg_samples_trimmed) := lapply(.SD, function(x) log2(x+1)), .SDcols=pg_samples_trimmed]
+
+replace_NAs(dat.gene, gg_samples_trimmed, 0)  # convert NA measurements to 0
+replace_NAs(dat.pro, pg_samples_trimmed, 0)   # convert NA measurements to 0
+
+
+
+
+
 
 if (!is.null(opt$pep_input)) {
   pep=read.delim(opt$pep_input)
@@ -56,6 +140,7 @@ if (!is.null(opt$pep_input)) {
   colnames(pep)=gsub(paste0('.',gsub("/",'.',opt$rawdata)),'',colnames(pep))
 }
 
+quit()
 #QC-----------------------------------------------------------------------------
 ##mkdir
 if (!dir.exists(paste0(opt$outdir,"/QC/"))){

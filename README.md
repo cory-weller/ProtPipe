@@ -27,10 +27,10 @@ To run on your personal/local non-Linux machine, Mac users need to first install
 After editing the contents of `config.txt`, or generating a new file to specify with `--config newfile.txt`:
 ```bash
 # Submit to SLURM
-sbatch src/run-diann.sh
+sbatch ./ProtPipe.sh --cfg config.txt
 
 # Run Locally
-src/run-diann.sh
+./ProtPipe.sh
 ```
 
 <details><summary>Re-running on generated spectral library</summary>

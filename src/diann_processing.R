@@ -1,10 +1,25 @@
 #!/usr/bin/env Rscript
-#R
+# R/4
 #proteomics analysis for DIA-NN
-#install packages and library--------------------------------------------------- 
+
+#### PACKAGES ######################################################################################
+
+package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'ggrepel', 'optparse')
+cat("INFO: Loading required packages\n      ")
+cat(paste(package_list, collapse='\n      ')); cat('\n')
+
+defaultW <- getOption("warn"); options(warn = -1)   # Temporarily disable warnings for quiet loading
+if(all((lapply(package_list, require, character.only=TRUE)))) {
+    cat("INFO: All packages successfully loaded\n")
+} else {
+    cat("ERROR: One or more packages not available. Are you running this within the container?\n")
+}
+options(warn = defaultW)    # Turn warnings back on
+
+
+#### ARG PARSING ###################################################################################
 library(optparse)
 pwd = getwd()
-
 optparse_indent = '\n                '
 option_list = list( 
     make_option(
@@ -38,7 +53,7 @@ option_list = list(
     make_option(
         "--out",
         dest="outdir",
-        default="./", 
+        default=pwd, 
         help=paste(
             'Directory to direct all output. Directory will be created if does not exist).',
             'Defaults to the current working directory:',
@@ -47,12 +62,12 @@ option_list = list(
         )
     ),
     make_option(
-        "--normalization",
+        "--normalize",
         action = 'store_true',
         default=FALSE,
         type='logical',
         help=paste(
-            'Applies data normalization. Not yet implimented.',
+            'Applies data normalization, assuming it has not yet been done. Not yet implimented.',
             sep=optparse_indent
         )
     ),
@@ -83,6 +98,16 @@ option_list = list(
             'Raw data file WHAT IS THIS FOR',
             sep=optparse_indent
         )
+    ),
+    make_option(
+        "--dry",
+        action = 'store_true',
+        default=FALSE, 
+        type='logical',
+        help=paste(
+            'Applies data imputation. Not yet implimented.',
+            sep=optparse_indent
+        )
     )
 )
 
@@ -90,25 +115,27 @@ opt = parse_args(OptionParser(usage = "Rscript %prog --pgfile [filename] --desig
 
 print(opt)
 
+if(opt$dry) {
+    cat("INFO: Quitting due to --dry run\n")
+    quit()
+}
+
+
 quit()
 
-library(ggplot2)
-library(data.table)
-library(corrplot)
-library(umap)
-library(ggrepel)
+#### IMPORT DATA ###################################################################################
+
 
 ## If not providing any args
-if(length(opt) == 4) {
-    opt <- list(proteingroups='exampleOutput/report.pg_matrix.tsv',
-                genegroups='exampleOutput/report.gg_matrix.tsv',
-                prefix='test',
-                out='testOutDir',
-                normalization=FALSE,
-                imputation=FALSE,
-                design='example/design_matrix.csv'
-                )
-}
+opt <- list(proteingroups='exampleOutput/report.pg_matrix.tsv',
+            genegroups='exampleOutput/report.gg_matrix.tsv',
+            prefix='test',
+            out='testOutDir',
+            normalization=FALSE,
+            imputation=FALSE,
+            design='example/design_matrix.csv'
+)
+
 
 print(opt)
 
@@ -126,24 +153,32 @@ identify_format <- function (DT) {
     }
 }
 
-import_DIANN_pg <- function(fn) {
-
-}
-
-import_DIANN_gg <- function(fn) {
-
-}
-
-import_spectronaut <- function(fn) {
-
-}
-
 # Within data.table `DT`, 
 # for `sdcols` specified columns, 
 # replaces all NA with `newvalue`
 replace_NAs <- function(DT, sdcols, newvalue) {
   DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
 }
+
+import_DIANN_pg <- function(fn) {
+  DT <- fread(fn, header=TRUE)
+  replace_NAs(DT)
+
+}
+
+import_DIANN_gg <- function(fn) {
+  DT <- fread(fn, header=TRUE)
+  replace_NAs(DT)
+
+}
+
+import_spectronaut <- function(fn) {
+  DT <- fread(fn, header=TRUE)
+  replace_NAs(DT)
+
+}
+
+
 
 #read file----------------------------------------------------------------------
 ##pro data,pep data and log2 transform pro data
@@ -169,6 +204,16 @@ setnames(dat.gene, basename(colnames(dat.gene)))
 gene_format <- identify_format(dat.gene)
 # <Genes>
 # <N sample columns>
+
+# Only concern myself with dat.pro into dat.gene ?
+dat <- fread('exampleOutput/report.tsv')
+desired_cols <- c(
+'Run', 'Protein.Group', 'Protein.Ids', 'Protein.Names', 'Genes', 'First.Protein.Description',
+'Q.Value', 'Protein.Q.Value', 'PG.Q.Value', 'Global.PG.Q.Value', 'GG.Q.Value', 'Translated.Q.Value',
+'PG.Quantity', 'PG.Normalised', 'Genes.Quantity', 'Genes.Normalised'
+)
+dat.sub <- dat[, (desired_cols), with=F]
+
 
 spectronaut_cols <- c('PG.ProteinGroups', 'PG.Genes', 'PG.ProteinDescriptions')
 diann_pg_cols <- c('Protein.Group', 'Protein.Ids', 'Protein.Names','Genes', 'First.Protein.Description')
@@ -198,8 +243,23 @@ if(gene_format == 'DIANN_genes') {
     quit()
 }
 
+pro.long <- melt(dat.pro, 
+    measure.vars=pg_samples_trimmed,
+    variable.name='sample',
+    value.name='abundance'
+)
 
+pro.long.summed <- pro.long[, list('abundance'=sum(abundance, na.rm=T)), by=list(Genes,sample)]
 
+gene.long <- melt(dat.gene, 
+    measure.vars=gg_samples_trimmed,
+    variable.name='sample',
+    value.name='abundance'
+)
+
+combined <- merge(pro.long, gene.long, by.x=c('Genes','sample'), by.y=c('Genes','sample'))
+combined[is.na(abundance.x), abundance.x := 0]
+combined[is.na(abundance.y), abundance.y := 0]
 
 # apply log2 transformation to (value+1)
 dat.gene[, (gg_samples_trimmed) := lapply(.SD, function(x) log2(x+1)), .SDcols=gg_samples_trimmed]

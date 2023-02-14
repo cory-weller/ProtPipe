@@ -86,7 +86,7 @@ option_list = list(
     )
 )
 
-opt = parse_args(OptionParser(usage = "Rscript %prog [options] ", option_list))
+opt = parse_args(OptionParser(usage = "Rscript %prog --pgfile [filename] --design [filename] [other options] ", option_list))
 
 print(opt)
 

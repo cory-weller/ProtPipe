@@ -3,27 +3,94 @@
 #proteomics analysis for DIA-NN
 #install packages and library--------------------------------------------------- 
 library(optparse)
+pwd = getwd()
 
+optparse_indent = '\n                '
 option_list = list( 
-  make_option("--proteingroups",  default=NULL,
-              help="Input file of protein group abundance"),
-  make_option("--genegroups", default=NULL,
-              help="Input file of gene group abudence"),
-  make_option(c("-p", "--prefix"),default=NULL,
-              dest="prefix", help="Prefix"),
-  make_option(c("-o", "--out"), dest="outdir",default="./", 
-              help="Output directory"),
-  make_option(c("-n", "--normalization"), default=FALSE, 
-              help="Normalization (NYI)"),
-  make_option(c("-i", "--imputation"), default=FALSE, 
-              help="Normalization (NYI)"),
-  make_option(c("--design"), default=NULL,  
-              help="Input file of experimental design"),
-  make_option(c("-r", "--rawdata"), help="Raw data file path WHAT DO WE MEAN")
+    make_option(
+        "--pgfile",
+        default=NULL,
+        help=paste(
+            'Input file of Protein Group Abundance (from DIA-NN or Spectronaut)',
+            'Required.',
+            sep=optparse_indent
+        )
+    ),
+    make_option(
+        "--ggfile",
+        default=NULL,
+        help=paste(
+            'Input file of Gene Group Abundance (from DIA-NN).',
+            'Optional.',
+            sep=optparse_indent
+        )
+    ),
+    make_option(
+        "--prefix",
+        default=NULL,
+        dest="prefix",
+        help=paste(
+            'Directory to direct all output. Directory will be created if does not exist).',
+            'Default: \'report\'',
+            sep=optparse_indent
+        )
+    ),
+    make_option(
+        "--out",
+        dest="outdir",
+        default="./", 
+        help=paste(
+            'Directory to direct all output. Directory will be created if does not exist).',
+            'Defaults to the current working directory:',
+            pwd,
+            sep=optparse_indent
+        )
+    ),
+    make_option(
+        "--normalization",
+        action = 'store_true',
+        default=FALSE,
+        type='logical',
+        help=paste(
+            'Applies data normalization. Not yet implimented.',
+            sep=optparse_indent
+        )
+    ),
+    make_option(
+        "--imputation",
+        action = 'store_true',
+        default=FALSE, 
+        type='logical',
+        help=paste(
+            'Applies data imputation. Not yet implimented.',
+            sep=optparse_indent
+        )
+    ),
+    make_option(
+        "--design",
+        default=NULL,  
+        help=paste(
+            'Comma- or tab-delimited, three-column text file specifying the experimental design.',
+            'File should contain headers. Header names do not matter; column order DOES matter.',
+            'Columns order: <sample_name> <condition> <control>',
+            sep=optparse_indent
+        )
+    ),
+    make_option(
+        "--rawdata",
+        default=NULL,
+        help=paste(
+            'Raw data file WHAT IS THIS FOR',
+            sep=optparse_indent
+        )
+    )
 )
 
-opt = parse_args(OptionParser(option_list=option_list))
+opt = parse_args(OptionParser(usage = "Rscript %prog [options] ", option_list))
 
+print(opt)
+
+quit()
 
 library(ggplot2)
 library(data.table)
@@ -57,6 +124,18 @@ identify_format <- function (DT) {
     else if(col_names[1] == 'PG.ProteinGroups') {
         return('Spectronaut')
     }
+}
+
+import_DIANN_pg <- function(fn) {
+
+}
+
+import_DIANN_gg <- function(fn) {
+
+}
+
+import_spectronaut <- function(fn) {
+
 }
 
 # Within data.table `DT`, 
@@ -134,11 +213,21 @@ replace_NAs(dat.pro, pg_samples_trimmed, 0)   # convert NA measurements to 0
 
 
 
-if (!is.null(opt$pep_input)) {
-  pep=read.delim(opt$pep_input)
-  pep=pep[,order(colnames(pep))]
-  colnames(pep)=gsub(paste0('.',gsub("/",'.',opt$rawdata)),'',colnames(pep))
-}
+
+#### GOOD THROUGH HERE #############################################################################
+#### 2023-02-13 4:22 PM
+
+
+
+
+
+
+
+
+
+
+
+
 
 quit()
 #QC-----------------------------------------------------------------------------

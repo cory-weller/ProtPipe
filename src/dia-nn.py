@@ -49,7 +49,12 @@ if __name__ == '__main__':
                         type=str,
                         metavar='config.txt',
                         help='File name to import DIA-NN configuration. Default: config.txt')
-
+    parser.add_argument('--out', 
+                        default=None,
+                        nargs='?',
+                        type=str,
+                        metavar='report.tsv',
+                        help='File name for final output report. Other output will share the same stem.')
     args = parser.parse_args()
 
 
@@ -276,26 +281,35 @@ if __name__ == '__main__':
         print("ERROR: Check argument(s):")
         print('\n'.join(logger.arg_errors)+'\n')
 
-    # Check output directory is writable
-    if '--out' in collected_args:
-        outdirs = collected_args['--out']   # entire list
-        outdir = outdirs[-1]                # last item in list, regardless of length
-        if len(outdirs) > 1:
-            logger.warning(f"WARNING: multiple --out arguments given. Only using {outdir}")
-            collected_args['--out'] = [outdir]
-        if not any([outdir.endswith(i) for i in ['txt','tsv']]):
-            msg = f"ERROR: --out must specify an output file ending in .txt or .tsv\n"
-            msg += f"You specified: --out {outdir}"
-            print(msg)
-            logger.permission_errors.append(msg)
-        outdir = basedir(outdir)
-        if not os.path.isdir(outdir):
-            logger.info(f"INFO: trying to create --out directory {outdir}")
-            if not args.dry:
-                try: os.makedirs(outdir)
-                except PermissionError:
-                    msg = f"ERROR: permission denied to create directory {outdir}"
-                    logger.permission_errors.append(msg)
+    # Parse --out from command line and config file; set to default <report.tsv> if unspecified
+    if args.out is not None and '--out' not in collected_args:
+        logger.info(f"INFO: saving output as {args.out}.[tsv,log, etc]")
+        collected_args['--out'] = [args.out]
+    elif args.out is not None and '--out' in collected_args:
+        logger.warning(f"WARNING: --out specified by command-line and by config file.")
+        logger.warning(f"WARNING: Using output name {args.out} and ignoring config file --out")
+        collected_args['--out'] = [args.out]
+    elif args.out is None and '--out' not in collected_args:
+        logger.info(f"INFO: saving output as report.[tsv,log, etc]")
+        collected_args['--out'] = ['report.tsv']
+    # Create directory if possible
+    outdirs = collected_args['--out']   # entire list
+    outdir = outdirs[-1]                # last item in list, regardless of length
+    if len(outdirs) > 1:
+        logger.warning(f"WARNING: multiple --out arguments given. Only using {outdir}")
+        collected_args['--out'] = [outdir]
+    if not any([outdir.endswith(i) for i in ['txt','tsv']]):
+        msg = f"ERROR: --out must specify an output file ending in .txt or .tsv\n"
+        msg += f"You specified: --out {outdir}"
+        logger.error(msg)
+    outdir = basedir(outdir)
+    if outdir != '' and not os.path.isdir(outdir):
+        logger.info(f"INFO: trying to create --out directory {outdir}")
+        if not args.dry:
+            try: os.makedirs(outdir)
+            except PermissionError:
+                msg = f"ERROR: permission denied to create directory {outdir}"
+                logger.error(msg)
 
 
     # Validate singularity

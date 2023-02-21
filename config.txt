@@ -1,4 +1,5 @@
 ## Arguments requiring values
+--out                   output/report.tsv
 --f                     example/raw/HREC_ETIS_1.mzML
 --f                     example/raw/HREC_ETIS_2.mzML
 --fasta                 example/uniprot-proteome_Human_UP000005640_20191105.fasta

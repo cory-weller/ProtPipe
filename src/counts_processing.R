@@ -1,9 +1,8 @@
 #!/usr/bin/env Rscript
 # R/4
-#proteomics analysis for DIA-NN
+#proteomics analysis for DIA-NN and Spectronaut quantity estimates
 
 #### PACKAGES ######################################################################################
-
 package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'ggrepel', 'optparse')
 cat("INFO: Loading required packages\n      ")
 cat(paste(package_list, collapse='\n      ')); cat('\n')
@@ -17,6 +16,51 @@ if(all((lapply(package_list, require, character.only=TRUE)))) {
 options(warn = defaultW)    # Turn warnings back on
 
 
+#### FUNCTIONS #####################################################################################
+# Within data.table `DT`, 
+# for `sdcols` specified columns, 
+# replaces all NA with `newvalue`
+replace_NAs <- function(DT, sdcols, newvalue) {
+  DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
+}
+
+
+standardize_format <- function(DT) {
+    if("Protein.Ids" %in% colnames(DT)) {
+        DT[, 'Protein.Ids' := NULL]
+        DT[, 'Protein.Names' := NULL]
+        setnames(DT, 'Protein.Group', 'Protein_Group')
+        setnames(DT, 'First.Protein.Description', 'Fist_Protein_Description')
+    } else if('PG.ProteinGroups' %in% colnames(DT)) {
+        setnames(DT, 'PG.ProteinGroups', 'Protein_Groups')
+        setnames(DT, 'PG.Genes', 'Genes')
+        setnames(DT, 'PG.ProteinDescriptions', 'First_Protein_Description')
+        # Use only first protein description
+        DT[, 'First_Protein_Description' := tstrsplit(First_Protein_Description, split=';')[1]]
+    }
+
+    # Remove leading directories for sample names
+    # e.g. /path/to/sample1.mzML -> sample1.mzML
+    setnames(DT, basename(colnames(DT)))
+
+    # Remove trailing file extensions
+    extensions <- '.mzML$|.mzml$|.RAW$|.raw$|.dia$|.DIA$'
+    extension_samplenames <-  colnames(DT)[colnames(DT) %like% extensions]
+    trimmed_samplenames <- gsub(extensions, '', extension_samplenames)
+    setnames(DT, extension_samplenames, trimmed_samplenames)
+    DT[]
+}
+
+melt_table <- function(DT) {
+    info_cols <- c('Protein_Groups', 'Genes', 'First_Protein_Description')
+    DT.long <- melt(DT, 
+    measure.vars=colnames(DT[,-c(1:3)]),
+    variable.name='Sample',
+    value.name='Abundance')
+    return(DT.long)
+}
+
+
 #### ARG PARSING ###################################################################################
 library(optparse)
 pwd = getwd()
@@ -28,25 +72,6 @@ option_list = list(
         help=paste(
             'Input file of Protein Group Abundance (from DIA-NN or Spectronaut)',
             'Required.',
-            sep=optparse_indent
-        )
-    ),
-    make_option(
-        "--ggfile",
-        default=NULL,
-        help=paste(
-            'Input file of Gene Group Abundance (from DIA-NN).',
-            'Optional.',
-            sep=optparse_indent
-        )
-    ),
-    make_option(
-        "--prefix",
-        default=NULL,
-        dest="prefix",
-        help=paste(
-            'Directory to direct all output. Directory will be created if does not exist).',
-            'Default: \'report\'',
             sep=optparse_indent
         )
     ),
@@ -92,14 +117,6 @@ option_list = list(
         )
     ),
     make_option(
-        "--rawdata",
-        default=NULL,
-        help=paste(
-            'Raw data file WHAT IS THIS FOR',
-            sep=optparse_indent
-        )
-    ),
-    make_option(
         "--dry",
         action = 'store_true',
         default=FALSE, 
@@ -111,171 +128,83 @@ option_list = list(
     )
 )
 
-opt = parse_args(OptionParser(usage = "Rscript %prog --pgfile [filename] --design [filename] [other options] ", option_list))
-
+usage_string <- "Rscript %prog --pgfile [filename] --design [filename] [other options] "
+opt <- parse_args(OptionParser(usage = usage_string, option_list))
 print(opt)
 
 if(opt$dry) {
     cat("INFO: Quitting due to --dry run\n")
-    quit()
+    quit(status=0)
 }
 
-
-quit()
 
 #### IMPORT DATA ###################################################################################
 
-
-## If not providing any args
-opt <- list(proteingroups='exampleOutput/report.pg_matrix.tsv',
-            genegroups='exampleOutput/report.gg_matrix.tsv',
-            prefix='test',
-            out='testOutDir',
-            normalization=FALSE,
-            imputation=FALSE,
-            design='example/design_matrix.csv'
-)
-
-
-print(opt)
-
-
-identify_format <- function (DT) {
-    col_names <- colnames(DT)
-    if(col_names[1] == 'Protein.Group') {
-        return('DIANN_proteins')
-    }
-    else if(col_names[1] == 'Genes') {
-        return('DIANN_genes')
-    }
-    else if(col_names[1] == 'PG.ProteinGroups') {
-        return('Spectronaut')
-    }
-}
-
-# Within data.table `DT`, 
-# for `sdcols` specified columns, 
-# replaces all NA with `newvalue`
-replace_NAs <- function(DT, sdcols, newvalue) {
-  DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
-}
-
-import_DIANN_pg <- function(fn) {
-  DT <- fread(fn, header=TRUE)
-  replace_NAs(DT)
-
-}
-
-import_DIANN_gg <- function(fn) {
-  DT <- fread(fn, header=TRUE)
-  replace_NAs(DT)
-
-}
-
-import_spectronaut <- function(fn) {
-  DT <- fread(fn, header=TRUE)
-  replace_NAs(DT)
-
-}
-
-
-
 #read file----------------------------------------------------------------------
 ##pro data,pep data and log2 transform pro data
-dat.pro <- fread(opt$proteingroups)
-setnames(dat.pro, basename(colnames(dat.pro)))
-pro_format <- identify_format(dat.pro)
-
-# <Protein.Group>
-# <Protein.Ids>
-# <Protein.Names>
-# <Genes>
-# <First.Protein.Description>
-# <N Sample columns>
-
-# Spectronaut output
-# <PG.ProteinGroups>
-# <PG.Genes>
-# <PG.ProteinDescriptions>
-# <N sample columns>
-
-dat.gene <- fread(opt$genegroups)
-setnames(dat.gene, basename(colnames(dat.gene)))
-gene_format <- identify_format(dat.gene)
-# <Genes>
-# <N sample columns>
-
-# Only concern myself with dat.pro into dat.gene ?
-dat <- fread('exampleOutput/report.tsv')
-desired_cols <- c(
-'Run', 'Protein.Group', 'Protein.Ids', 'Protein.Names', 'Genes', 'First.Protein.Description',
-'Q.Value', 'Protein.Q.Value', 'PG.Q.Value', 'Global.PG.Q.Value', 'GG.Q.Value', 'Translated.Q.Value',
-'PG.Quantity', 'PG.Normalised', 'Genes.Quantity', 'Genes.Normalised'
-)
-dat.sub <- dat[, (desired_cols), with=F]
-
-
-spectronaut_cols <- c('PG.ProteinGroups', 'PG.Genes', 'PG.ProteinDescriptions')
-diann_pg_cols <- c('Protein.Group', 'Protein.Ids', 'Protein.Names','Genes', 'First.Protein.Description')
-diann_gg_cols <- c('Genes')
-
-
-
-# rename columns, trimming mass spec file extensions
-gg_samples <- colnames(dat.gene)[colnames(dat.gene) %like% '.mzML$|.raw$|.dia$']
-gg_samples_trimmed <- gsub('.mzML$|.mzml$|.RAW$|.raw$|.dia$|.DIA$', '', gg_samples)
-setnames(dat.gene, gg_samples, gg_samples_trimmed)
-pg_samples <- colnames(dat.pro)[colnames(dat.pro) %like% '.mzML$|.raw$|.dia$']
-pg_samples_trimmed <- gsub('.mzML$|.mzml$|.RAW$|.raw$|.dia$|.DIA$', '', pg_samples)
-setnames(dat.pro, pg_samples, pg_samples_trimmed)
-
-if(pro_format == 'DIANN_proteins') {
-    setcolorder(dat.pro, c(diann_pg_cols, sort(pg_samples_trimmed)))
-} else if(pro_format == 'Spectronaut') {
-    setcolorder(dat.pro, c(spectronaut_cols, sort(pg_samples_trimmed)))
-} else {
-    quit()
-}
-
-if(gene_format == 'DIANN_genes') {
-    setcolorder(dat.gene, c('Genes', sort(gg_samples_trimmed)))
-} else {
-    quit()
-}
-
-pro.long <- melt(dat.pro, 
-    measure.vars=pg_samples_trimmed,
-    variable.name='sample',
-    value.name='abundance'
+    
+cat(paste0('INFO: Reading input file ', opt$pgfile, '\n'))
+dat <- tryCatch(
+    fread(opt$pgfile),
+    error = function(e){
+        cat('ERROR: failed! Check file exists or errors in file path?\n')
+        quit(status=1)
+    },
+    finally = cat('')
 )
 
-pro.long.summed <- pro.long[, list('abundance'=sum(abundance, na.rm=T)), by=list(Genes,sample)]
-
-gene.long <- melt(dat.gene, 
-    measure.vars=gg_samples_trimmed,
-    variable.name='sample',
-    value.name='abundance'
+cat(paste0('INFO: Normalizing data from ', opt$pgfile, '\n'))
+tryCatch(
+    standardize_format(dat),
+    error = function(e){
+        cat('ERROR: failed! Check for missing/corrupt headers?\n')
+        quit(status=1)
+    },
+    finally = cat('')
 )
 
-combined <- merge(pro.long, gene.long, by.x=c('Genes','sample'), by.y=c('Genes','sample'))
-combined[is.na(abundance.x), abundance.x := 0]
-combined[is.na(abundance.y), abundance.y := 0]
-
-# apply log2 transformation to (value+1)
-dat.gene[, (gg_samples_trimmed) := lapply(.SD, function(x) log2(x+1)), .SDcols=gg_samples_trimmed]
-dat.pro[, (pg_samples_trimmed) := lapply(.SD, function(x) log2(x+1)), .SDcols=pg_samples_trimmed]
-
-replace_NAs(dat.gene, gg_samples_trimmed, 0)  # convert NA measurements to 0
-replace_NAs(dat.pro, pg_samples_trimmed, 0)   # convert NA measurements to 0
+sample_names <- colnames(dat[, -c(1:3)])
 
 
+cat(paste0('INFO: Converting to long format\n'))
+tryCatch(
+    dat.long <- melt_table(dat),
+    error = function(e){
+        cat('ERROR: failed!\n')
+        quit(status=1)
+    },
+    finally = cat('')
+)
 
+print(dat.long)
 
+cat(paste0('INFO: Applying log2(value+1) to abundances\n'))
+tryCatch(
+    dat.long[, Abundance := log2(Abundance + 1)],
+    error = function(e){
+        cat('ERROR: failed!\n')
+        quit(status=1)
+    },
+    finally = cat('')
+)
 
+print(dat.long)
+
+cat(paste0('INFO: Converting NA abundances to 0'))
+tryCatch(
+    dat.long[is.na(Abundance), Abundance := 0],
+    error = function(e){
+        cat('ERROR: failed!\n')
+        quit(status=1)
+    },
+    finally = cat('')
+)
+
+print(dat.long)
 
 
 #### GOOD THROUGH HERE #############################################################################
-#### 2023-02-13 4:22 PM
+#### 2023-02-21 11:04 am
 
 
 

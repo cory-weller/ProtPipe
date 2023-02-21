@@ -3,7 +3,7 @@
 #proteomics analysis for DIA-NN and Spectronaut quantity estimates
 
 #### PACKAGES ######################################################################################
-package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'ggrepel', 'optparse')
+package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'ggrepel', 'optparse', 'ggthemes', 'foreach')
 cat("INFO: Loading required packages\n      ")
 cat(paste(package_list, collapse='\n      ')); cat('\n')
 
@@ -15,6 +15,21 @@ if(all((lapply(package_list, require, character.only=TRUE)))) {
 }
 options(warn = defaultW)    # Turn warnings back on
 
+#### MAKE DIRS #####################################################################################
+QC_dir <- paste0(opt$outdir, '/QC/')
+if(! dir.exists(QC_dir)){
+    dir.create(QC_dir, recursive = T)
+}
+
+cluster_dir <- paste0(opt$outdir, '/clustering/')
+if(! dir.exists(cluster_dir)){
+    dir.create(cluster_dir, recursive = T)
+}
+
+DA_dir <- paste0(opt$outdir, '/differential_intensity/')
+if(! dir.exists(DA_dir)){
+    dir.create(DA_dir, recursive = T)
+}
 
 #### FUNCTIONS #####################################################################################
 # Within data.table `DT`, 
@@ -56,10 +71,17 @@ melt_table <- function(DT) {
     DT.long <- melt(DT, 
     measure.vars=colnames(DT[,-c(1:3)]),
     variable.name='Sample',
-    value.name='Abundance')
+    value.name='Intensity')
     return(DT.long)
 }
 
+if(! exists('opt')) {
+    opt <- list(); 
+    opt$pgfile <- 'output/report.pg_matrix.tsv'
+    opt$outdir <- 'output'
+    opt$design <- 'example/design_matrix.csv'
+    opt$dry <- FALSE
+}
 
 #### ARG PARSING ###################################################################################
 library(optparse)
@@ -70,7 +92,7 @@ option_list = list(
         "--pgfile",
         default=NULL,
         help=paste(
-            'Input file of Protein Group Abundance (from DIA-NN or Spectronaut)',
+            'Input file of Protein Group Intensity (from DIA-NN or Spectronaut)',
             'Required.',
             sep=optparse_indent
         )
@@ -178,9 +200,9 @@ tryCatch(
 
 print(dat.long)
 
-cat(paste0('INFO: Applying log2(value+1) to abundances\n'))
+cat(paste0('INFO: Applying log2(value+1) to intensities\n'))
 tryCatch(
-    dat.long[, Abundance := log2(Abundance + 1)],
+    dat.long[, Intensity := log2(Intensity + 1)],
     error = function(e){
         cat('ERROR: failed!\n')
         quit(status=1)
@@ -190,9 +212,9 @@ tryCatch(
 
 print(dat.long)
 
-cat(paste0('INFO: Converting NA abundances to 0'))
+cat(paste0('INFO: Converting NA Intensities to 0\n'))
 tryCatch(
-    dat.long[is.na(Abundance), Abundance := 0],
+    dat.long[is.na(Intensity), Intensity := 0],
     error = function(e){
         cat('ERROR: failed!\n')
         quit(status=1)
@@ -209,127 +231,172 @@ print(dat.long)
 
 
 
+#### QC ############################################################################################
 
 
 
 
+#### PROTEIN GROUP COUNTS
+# pgcounts represents the distribution of Protein Groups with Intensity > 0
+# Visually, it is represented as a bar plot with x=sample, y=N, ordered by descending N
+# Get counts of [N=unique gene groups with `Intensity` > 0]
+pgcounts <- dat.long[, list('N'=sum(Intensity>0)), by=Sample]
 
+# Order samples by ascending counts
+pgcounts[, Sample := factor(Sample, levels=pgcounts[order(-N), Sample])]
 
+fwrite(pgcounts,
+    file=paste0(QC_dir, 'protein_group_nonzero_counts.tsv'),
+    quote=F,
+    row.names=F,
+    col.names=T,
+    sep='\t'
+)
+g.pgcounts <- ggplot(pgcounts, aes(x=Sample, y=N, label=N)) +
+                geom_bar(stat='identity') +
+                theme_few() +
+                labs(x='Sample', y='N Protein Groups where Log2(Intensity) > 0') +
+                geom_text(aes(y=N + (0.02*max(pgcounts$N)))
+)
 
+ggsave(g.pgcounts,
+    filename=paste0(QC_dir, 'protein_group_nonzero_counts.png')
+)
 
-
-quit()
-#QC-----------------------------------------------------------------------------
-##mkdir
-if (!dir.exists(paste0(opt$outdir,"/QC/"))){
-  dir.create(paste0(opt$outdir,"/QC/"),recursive = T)
+#### THRESHOLDED PROTEIN GROUP COUNTS
+# pgthresholds represents the decay in number of unique protein groups per sample as
+# the minimum Intensity threshold is incremented. Visually represented as a line plot.
+pgthresholds <- foreach(threshold=0:(1+max(dat.long$Intensity)), .combine='rbind') %do% {
+    dat.tmp <- dat.long[, list('N'=sum(Intensity > threshold)), by=Sample]
+    dat.tmp[, 'Threshold' := threshold]
+    return(dat.tmp)
 }
-out_dir=paste0(opt$outdir,"/QC/")
 
-##protein QC
-if (!is.null(opt$pro_input)) {
-  ###protein number
-  df_pro_num=data.frame(sample = colnames(pro)[grep('mzML',colnames(pro))],
+fwrite(pgthresholds,
+    file=paste0(QC_dir, 'protein_group_thresholds.tsv'),
+    quote=F,
+    row.names=F,
+    col.names=T,
+    sep='\t'
+)
+
+g.pgthresholds <- ggplot(pgthresholds, aes(x=Threshold, y=N, color=Sample)) +
+                    geom_line() +
+                    geom_point(shape=21, alpha=0.5) +
+                    theme_few() +
+                    labs(x='Minimum Log2(Intensity) Threshold', y='N Protein Groups where Log2(Intensity) > Threshold')
+
+ggsave(g.pgthresholds,
+    filename=paste0(QC_dir, 'protein_group_thresholds.png')
+)
+
+####
+####
+####
+
+
+
+
+###protein number
+df_pro_num=data.frame(sample = colnames(pro)[grep('mzML',colnames(pro))],
                         pro.num = (nrow(pro)-apply(pro[,grep('mzML',colnames(pro))],2,function(x) sum(is.na(x)))))
-  df_pro_num$sample=gsub('.mzML','',df_pro_num$sample)
-  write.csv(df_pro_num,file = paste0(out_dir,opt$prefix,"_protein_number.csv"),row.names = F)
-  p=ggplot(data=df_pro_num, aes(x=sample, y=pro.num)) +
+df_pro_num$sample=gsub('.mzML','',df_pro_num$sample)
+
+write.csv(df_pro_num,file = paste0(QC_dir,opt$prefix,"_protein_number.csv"),row.names = F)
+p=ggplot(data=df_pro_num, aes(x=sample, y=pro.num)) +
     geom_bar(stat="identity", fill="steelblue")+
     theme_classic()+
     labs(fill = "",x="",y='#Protein Groups')+
     scale_x_discrete(guide = guide_axis(angle = 90))+ 
     geom_hline(yintercept=floor(mean(df_pro_num$pro.num)/1000)*1000, linetype="dashed", color = "red")
-  if (ncol(pro)>50){
-    ggsave(plot = p,filename = paste0(out_dir,opt$prefix,"_protein_number.pdf"),width = ncol(pro)/10,height = 6)
-  }else {
-    ggsave(plot = p,filename = paste0(out_dir,opt$prefix,"_protein_number.pdf"))
-  } 
+if (ncol(pro)>50){
+    ggsave(plot = p,filename = paste0(QC_dir,opt$prefix,"_protein_number.pdf"),width = ncol(pro)/10,height = 6)
+}else {
+    ggsave(plot = p,filename = paste0(QC_dir,opt$prefix,"_protein_number.pdf"))
+} 
   
-  ###protein distribution
-  df_pro_dis=melt(pro[,grep('mzML',colnames(pro))])
-  df_pro_dis=na.omit(df_pro_dis)
-  df_pro_dis$variable=gsub('.mzML','',df_pro_dis$variable)
-  df_pro_dis$value=log10(df_pro_dis$value+1)
-  median=log10(median(na.omit(pro[,grep('mzML',colnames(pro))][,1]))+1)
-  p=ggplot(df_pro_dis, aes(x=variable, y=value)) + 
+###protein distribution
+df_pro_dis=melt(pro[,grep('mzML',colnames(pro))])
+df_pro_dis=na.omit(df_pro_dis)
+df_pro_dis$variable=gsub('.mzML','',df_pro_dis$variable)
+df_pro_dis$value=log10(df_pro_dis$value+1)
+median=log10(median(na.omit(pro[,grep('mzML',colnames(pro))][,1]))+1)
+p=ggplot(df_pro_dis, aes(x=variable, y=value)) + 
     geom_boxplot(outlier.shape = NA, fill="steelblue")+
     theme_classic()+
     labs(fill = "",x="",y='Log10(Protein intensity)')+
     scale_x_discrete(guide = guide_axis(angle = 90)) + 
     geom_hline(yintercept=median, linetype="dashed", color = "red")
-  if (ncol(pro)>50){
-    ggsave(plot = p,filename = paste0(out_dir,opt$prefix,"_log10_protein_intensity.pdf"),width = ncol(pro)/10,height =6)
-  }else{
-    ggsave(plot = p,filename = paste0(out_dir,opt$prefix,"_log10_protein_intensity.pdf"))
-  }
+if (ncol(pro)>50){
+    ggsave(plot = p,filename = paste0(QC_dir,opt$prefix,"_log10_protein_intensity.pdf"),width = ncol(pro)/10,height =6)
+}else{
+    ggsave(plot = p,filename = paste0(QC_dir,opt$prefix,"_log10_protein_intensity.pdf"))
+}
   
   ###correlation for pro
-  pro_cor=pro
-  pro_cor[is.na(pro_cor)]=0
-  cor_matrix = cor(as.matrix(na.omit(pro[,grep('mzML',colnames(pro))])),method = "spearman")
-  df_pro_cor=melt(cor_matrix)
-  df_pro_cor$value=round(df_pro_cor$value,2)
-  df_pro_cor$Var1=gsub('.mzML','',df_pro_cor$Var1)
-  df_pro_cor$Var2=gsub('.mzML','',df_pro_cor$Var2)
-  write.csv(cor_matrix,paste0(out_dir,opt$prefix,"_correlation.csv"))
-  if (ncol(cor_matrix)< 20) {
+pro_cor=pro
+pro_cor[is.na(pro_cor)]=0
+cor_matrix = cor(as.matrix(na.omit(pro[,grep('mzML',colnames(pro))])),method = "spearman")
+df_pro_cor=melt(cor_matrix)
+df_pro_cor$value=round(df_pro_cor$value,2)
+df_pro_cor$Var1=gsub('.mzML','',df_pro_cor$Var1)
+df_pro_cor$Var2=gsub('.mzML','',df_pro_cor$Var2)
+write.csv(cor_matrix,paste0(QC_dir,opt$prefix,"_correlation.csv"))
+if (ncol(cor_matrix)< 20) {
     p=ggplot(data=df_pro_cor,aes(Var1, Var2, fill = value)) + 
-      geom_tile(color = "black")+
-      theme_classic()+
-      scale_fill_gradient(low = '#f7fbff', high ='#08306b'  ) +
-      geom_text(aes(label = value))+
-      coord_fixed()+
-      scale_x_discrete(guide = guide_axis(angle = 90)) + 
-      xlab("") +
-      ylab("")+
-      labs(fill = "Correlation")
-    ggsave(filename = paste0(out_dir,opt$prefix,"_correlation.pdf"),
+        geom_tile(color = "black")+
+        theme_classic()+
+        scale_fill_gradient(low = '#f7fbff', high ='#08306b'  ) +
+        geom_text(aes(label = value))+
+        coord_fixed()+
+        scale_x_discrete(guide = guide_axis(angle = 90)) + 
+        xlab("") +
+        ylab("")+
+        labs(fill = "Correlation")
+    ggsave(filename = paste0(QC_dir,opt$prefix,"_correlation.pdf"),
            plot = p,width = 6,height = 6)
-  }else 
-  {
+}else {
     p=ggplot(data=df_pro_cor,aes(Var1, Var2, fill = value)) + 
-      geom_tile(color = "black")+
-      theme_classic()+
-      scale_fill_gradient(low = '#f7fbff', high ='#08306b' ) +
-      coord_fixed()+
-      scale_x_discrete(guide = guide_axis(angle = 90)) + 
-      xlab("") +
-      ylab("")+
-      labs(fill = "Correlation")
-    ggsave(filename = paste0(out_dir,opt$prefix,"_correlation.pdf"),plot = p,width = ncol(pro)/4,height = ncol(pro)/4)
-  }
+        geom_tile(color = "black")+
+        theme_classic()+
+        scale_fill_gradient(low = '#f7fbff', high ='#08306b' ) +
+        coord_fixed()+
+        scale_x_discrete(guide = guide_axis(angle = 90)) + 
+        xlab("") +
+        ylab("")+
+        labs(fill = "Correlation")
+    ggsave(filename = paste0(QC_dir,opt$prefix,"_correlation.pdf"),plot = p,width = ncol(pro)/4,height = ncol(pro)/4)
 }
 
+
 ##peptide QC
-if (!is.null(opt$pep_input)) {
   ###peptide number---------------------------------------------------------------------
-  df=data.frame(sample = colnames(pep)[grep('mzML',colnames(pep))],
+df=data.frame(sample = colnames(pep)[grep('mzML',colnames(pep))],
                 pep.num = (nrow(pep)-apply(pep[,grep('mzML',colnames(pep))],2,function(x) sum(is.na(x)))))
-  df$sample=gsub('.mzML','',df$sample)
-  p=ggplot(data=df, aes(x=sample, y=pep.num)) +
+df$sample=gsub('.mzML','',df$sample)
+p=ggplot(data=df, aes(x=sample, y=pep.num)) +
     geom_bar(stat="identity", fill="steelblue")+
     theme_classic()+
     labs(fill = "",x="",y='#Peptide number')+
     scale_x_discrete(guide = guide_axis(angle = 90)) + 
     geom_hline(yintercept=floor(mean(df$pep.num)/10000)*10000, linetype="dashed", color = "red")
-  ggsave(plot = p,filename = paste0(out_dir,opt$prefix,"_peptide_number.pdf"))
+ggsave(plot = p,filename = paste0(QC_dir,opt$prefix,"_peptide_number.pdf"))
   
   
-  ##peptide distribution
-  df=melt(pep[,grep('mzML',colnames(pep))])
-  df=na.omit(df)
-  df$variable=gsub('.mzML','',df$variable)
-  df$value=log10(df$value+1)
-  median=log10(median(na.omit(pep[,grep('mzML',colnames(pep))][,1]))+1)
-  p=ggplot(df, aes(x=variable, y=value)) + 
+##peptide distribution
+df=melt(pep[,grep('mzML',colnames(pep))])
+df=na.omit(df)
+df$variable=gsub('.mzML','',df$variable)
+df$value=log10(df$value+1)
+median=log10(median(na.omit(pep[,grep('mzML',colnames(pep))][,1]))+1)
+p=ggplot(df, aes(x=variable, y=value)) + 
     geom_boxplot(outlier.shape = NA, fill="steelblue")+
     theme_classic()+
     labs(fill = "",x="",y='Log10(Peptide intensity)')+
     scale_x_discrete(guide = guide_axis(angle = 90)) + 
     geom_hline(yintercept=median, linetype="dashed", color = "red")
-  ggsave(filename = paste0(out_dir,opt$prefix,"_log10_peptide_distribution.pdf"),plot = p)
-  
-}
+ggsave(filename = paste0(QC_dir,opt$prefix,"_log10_peptide_distribution.pdf"),plot = p)
+
 
 #filter sample by the correlation,and protein number----------------------------
 ##filter sample by the correlation

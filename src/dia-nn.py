@@ -86,8 +86,7 @@ if __name__ == '__main__':
         try:
             subprocess.check_output(['singularity', '--version']).decode()
         except FileNotFoundError:
-            if not f"singularity/{s.version}" in subprocess.getoutput("module spider singularity"):
-                logger.error(f"{s.version} not available as module")
+            logger.error(f"{s.version} not available as module")
         return True
 
     

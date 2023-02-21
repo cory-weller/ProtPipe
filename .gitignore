@@ -4,3 +4,4 @@
 *.mzML
 *.mzML.quant
 slurm*.out
+output/*

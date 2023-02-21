@@ -3,7 +3,8 @@
 #proteomics analysis for DIA-NN and Spectronaut quantity estimates
 
 #### PACKAGES ######################################################################################
-package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'ggrepel', 'optparse', 'ggthemes', 'foreach')
+package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'magick',
+                 'ggbeeswarm', 'ggrepel', 'optparse', 'ggthemes', 'foreach')
 cat("INFO: Loading required packages\n      ")
 cat(paste(package_list, collapse='\n      ')); cat('\n')
 
@@ -252,12 +253,13 @@ fwrite(pgcounts,
     col.names=T,
     sep='\t'
 )
-g.pgcounts <- ggplot(pgcounts, aes(x=Sample, y=N, label=N)) +
-                geom_bar(stat='identity') +
+g.pgcounts <- ggplot(pgcounts, aes(x=Sample, y=N)) +
+                geom_bar(stat='identity', position='dodge', aes(y=N)) +
+                geom_text(aes(label=N, y=N + (0.05*max(pgcounts$N)))) +
+                coord_flip() +
                 theme_few() +
-                labs(x='Sample', y='N Protein Groups where Log2(Intensity) > 0') +
-                geom_text(aes(y=N + (0.02*max(pgcounts$N)))
-)
+                labs(x='Sample', y='N Protein Groups where Log2(Intensity) > 0')
+
 
 ggsave(g.pgcounts,
     filename=paste0(QC_dir, 'protein_group_nonzero_counts.png')
@@ -293,28 +295,41 @@ ggsave(g.pgthresholds,
 ####
 ####
 ####
+increasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][order(median), Sample]
+decreasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][order(-median), Sample]
+
+dat.long[, Sample := factor(Sample, levels=increasing_levels)]
+
+
+g.intensity_beeswarm <- ggplot(dat.long, aes(x=0, y=Intensity)) +
+    geom_beeswarm() +
+    facet_wrap(Sample~., strip.position=c('bottom')) +
+    theme_few() +
+    theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+    labs(x='Sample', y='Log2(Intensitiy)') +
+    theme(strip.text.x.bottom = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
+        scale_y_continuous(position='right') +
+        theme(axis.text.y.right=element_text(angle=90, hjust=0.5)) +
+    theme(axis.title.x.bottom = element_text(angle = 180, hjust=0.5, vjust=0.5)) +
+    theme(axis.title.y.right = element_text(angle = 90, hjust=0.5, vjust=0.5)) 
 
 
 
+ggsave(g.intensity_beeswarm, filename=paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
 
-###protein number
-df_pro_num=data.frame(sample = colnames(pro)[grep('mzML',colnames(pro))],
-                        pro.num = (nrow(pro)-apply(pro[,grep('mzML',colnames(pro))],2,function(x) sum(is.na(x)))))
-df_pro_num$sample=gsub('.mzML','',df_pro_num$sample)
+tmpimage <- image_read(paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
+image_rotate(tmpimage, 90) %>% image_write(paste0(QC_dir, 'intensity_beeswarm.png'))
+file.remove(paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
 
-write.csv(df_pro_num,file = paste0(QC_dir,opt$prefix,"_protein_number.csv"),row.names = F)
-p=ggplot(data=df_pro_num, aes(x=sample, y=pro.num)) +
-    geom_bar(stat="identity", fill="steelblue")+
-    theme_classic()+
-    labs(fill = "",x="",y='#Protein Groups')+
-    scale_x_discrete(guide = guide_axis(angle = 90))+ 
-    geom_hline(yintercept=floor(mean(df_pro_num$pro.num)/1000)*1000, linetype="dashed", color = "red")
-if (ncol(pro)>50){
-    ggsave(plot = p,filename = paste0(QC_dir,opt$prefix,"_protein_number.pdf"),width = ncol(pro)/10,height = 6)
-}else {
-    ggsave(plot = p,filename = paste0(QC_dir,opt$prefix,"_protein_number.pdf"))
-} 
-  
+dat.long[, Sample := factor(Sample, levels=decreasing_levels)]
+
+g.intensity_boxplot <- ggplot(dat.long, aes(x=Sample, y=Intensity)) +
+    geom_boxplot() +
+    theme_few() +
+    coord_flip() +
+    labs(x='Sample', y='Log2(Intensity)')
+ggsave(g.intensity_boxplot, filename=paste0(QC_dir, 'intensity_boxplot.png'))
+
 ###protein distribution
 df_pro_dis=melt(pro[,grep('mzML',colnames(pro))])
 df_pro_dis=na.omit(df_pro_dis)

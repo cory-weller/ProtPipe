@@ -2,7 +2,9 @@
 
 singularity_vers='3'
 
-# Check singularity exists
+
+
+#### CHECK SINGULARITY #############################################################################
 if ! command -v singularity &> /dev/null; then
     echo "INFO: singularity command not found, looking for singularity module"
     if ! command -v module &> /dev/null; then
@@ -21,7 +23,7 @@ else
     echo 'INFO: singularity command found'
 fi
 
-# Check python3 exists
+#### CHECK PYTHON3 #################################################################################
 if ! command -v python3 &> /dev/null; then
     if command -v module &> /dev/null; then
         if $(module avail python/3 2>&1 >/dev/null | grep -q 'No module'); then
@@ -35,13 +37,48 @@ else
     echo "INFO: python3 command found"
 fi
 
-python3 src/dia-nn.py $@
 
-# add singularity pull for R .sif
+#### RUN DIA-NN ####################################################################################
+
+if grep -q -- '--skip' <<< $(echo $@); then
+    echo 'INFO: Skipping DIA-NN due to --skip'
+    # Remove --skip from $@
+    for arg do
+        shift
+        [ "$arg" = "--skip" ] && continue
+        set -- "$@" "$arg"
+    done
+else
+    python3 src/dia-nn.py $@
+fi
+
+
+#### R ANALYSIS ####################################################################################
+# Check singularity image integrity
+r_version='r/4.0:1.3'
+r_sif="src/R.sif"
+r_sif_md5_desired='b052311c61f29e1815d5b7436a35b8a2'
+if [ ! -f "${r_sif}" ]; then
+    echo "INFO: Pulling ${r_sif} from remote library://wellerca/${r_version}" 
+    singularity pull ${r_sif} library://wellerca/${r_version}
+else
+    echo "INFO: ${r_sif} already exists, skipping download"
+fi
+
+r_sif_md5_actual=$(md5sum "${r_sif}" | awk '{print $1}')
+
+if [ ! "${r_sif_md5_actual}" == "${r_sif_md5_desired}" ]; then
+    echo "ERROR: ${r_sif} md5 sum does not pass check. Possibly corrupted? Delete and try again."
+    exit 1
+else
+    echo "INFO: ${r_sif} md5 sum passes check"
+fi
 
 diann_r_file='src/counts_processing.R'
 folder='output'
-singularity exec --cleanenv -H ${PWD} src/r-4.0.sif Rscript ${diann_r_file} \
+singularity exec --cleanenv -H ${PWD} ${r_sif} Rscript ${diann_r_file} \
 --pgfile        ${folder}/report.pg_matrix.tsv \
 --out           ${folder} \
 --design        example/design_matrix.csv
+
+

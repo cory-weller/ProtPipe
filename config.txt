@@ -11,10 +11,10 @@
 --cut                   K*,R*
 --missed-cleavages      2
 --min-pep-len           7
---max-pep-len           52
+--max-pep-len           25
 --min-pr-mz             300
 --max-pr-mz             1800
---min-pr-charge         1
+--min-pr-charge         2
 --max-pr-charge         4
 --var-mods              5
 --var-mod               UniMod:35,15.994915,M

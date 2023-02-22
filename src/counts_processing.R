@@ -16,29 +16,13 @@ if(all((lapply(package_list, require, character.only=TRUE)))) {
 }
 options(warn = defaultW)    # Turn warnings back on
 
-#### MAKE DIRS #####################################################################################
-QC_dir <- paste0(opt$outdir, '/QC/')
-if(! dir.exists(QC_dir)){
-    dir.create(QC_dir, recursive = T)
-}
-
-cluster_dir <- paste0(opt$outdir, '/clustering/')
-if(! dir.exists(cluster_dir)){
-    dir.create(cluster_dir, recursive = T)
-}
-
-DA_dir <- paste0(opt$outdir, '/differential_intensity/')
-if(! dir.exists(DA_dir)){
-    dir.create(DA_dir, recursive = T)
-}
-
 #### FUNCTIONS #####################################################################################
 # Within data.table `DT`, 
 # for `sdcols` specified columns, 
 # replaces all NA with `newvalue`
-replace_NAs <- function(DT, sdcols, newvalue) {
-  DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
-}
+# replace_NAs <- function(DT, sdcols, newvalue) {
+#   DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
+# }
 
 
 standardize_format <- function(DT) {
@@ -76,13 +60,6 @@ melt_table <- function(DT) {
     return(DT.long)
 }
 
-if(! exists('opt')) {
-    opt <- list(); 
-    opt$pgfile <- 'output/report.pg_matrix.tsv'
-    opt$outdir <- 'output'
-    opt$design <- 'example/design_matrix.csv'
-    opt$dry <- FALSE
-}
 
 #### ARG PARSING ###################################################################################
 library(optparse)
@@ -160,6 +137,31 @@ if(opt$dry) {
     quit(status=0)
 }
 
+if(FALSE) {
+    opt <- list(); 
+    opt$pgfile <- 'output/report.pg_matrix.tsv'
+    opt$outdir <- 'output'
+    opt$design <- 'example/design_matrix.csv'
+    opt$dry <- FALSE
+}
+
+
+
+#### MAKE DIRS #####################################################################################
+QC_dir <- paste0(opt$outdir, '/QC/')
+if(! dir.exists(QC_dir)){
+    dir.create(QC_dir, recursive = T)
+}
+
+cluster_dir <- paste0(opt$outdir, '/clustering/')
+if(! dir.exists(cluster_dir)){
+    dir.create(cluster_dir, recursive = T)
+}
+
+DA_dir <- paste0(opt$outdir, '/differential_intensity/')
+if(! dir.exists(DA_dir)){
+    dir.create(DA_dir, recursive = T)
+}
 
 #### IMPORT DATA ###################################################################################
 
@@ -300,35 +302,78 @@ decreasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][ord
 
 dat.long[, Sample := factor(Sample, levels=increasing_levels)]
 
+intensity_median <- median(dat.long[, Intensity])
 
-g.intensity_beeswarm <- ggplot(dat.long, aes(x=0, y=Intensity)) +
-    geom_beeswarm() +
-    facet_wrap(Sample~., strip.position=c('bottom')) +
+# g.intensity_beeswarm <- ggplot(dat.long, aes(x=0, y=Intensity)) +
+#     geom_beeswarm() +
+#     facet_wrap(Sample~., strip.position=c('bottom')) +
+#     theme_few() +
+#     theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+#     labs(x='Sample', y='Log2(Intensitiy)') +
+#     theme(strip.text.x.bottom = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
+#     scale_y_continuous(position='right') +
+#     theme(axis.text.y.right=element_text(angle=90, hjust=0.5)) +
+#     theme(axis.title.x.bottom = element_text(angle = 180, hjust=0.5, vjust=0.5)) +
+#     theme(axis.title.y.right = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
+#     geom_hline(yintercept=intensity_median, color='red', linetype='dashed', alpha=1) 
+
+# ggsave(g.intensity_beeswarm, filename=paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
+
+# tmpimage <- image_read(paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
+# image_rotate(tmpimage, 90) %>% image_write(paste0(QC_dir, 'intensity_beeswarm.png'))
+# file.remove(paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
+
+# dat.long[, Sample := factor(Sample, levels=increasing_levels)]
+
+# g.intensity_boxplot <- ggplot(dat.long, aes(x=Sample, y=Intensity)) +
+#     geom_boxplot() +
+#     theme_few() +
+#     coord_flip() +
+#     geom_hline(yintercept=intensity_median, color='red', linetype='dashed', alpha=1) +
+#     labs(x='Sample', y='Log2(Intensity)')
+# ggsave(g.intensity_boxplot, filename=paste0(QC_dir, 'intensity_boxplot.png'))
+
+dat.quantiles <- dat.long[, list(
+                'q025'=quantile(Intensity, 0.025),
+                'q25'=quantile(Intensity, 0.25),
+                'q50'=quantile(Intensity, 0.50),
+                'q75'=quantile(Intensity, 0.75),
+                'q975'=quantile(Intensity, 0.975)
+                ), by=Sample]
+
+
+dat.legend <- melt(dat.quantiles[which.min(as.numeric(Sample))], measure.vars=colnames(dat.quantiles[,-1]))
+dat.legend[, qlabel := tstrsplit(variable, split='q')[2]]
+dat.legend[, qlabel := paste0('0.', qlabel)]
+dat.legend[, qlabel := as.numeric(qlabel)]
+
+dat.background <- melt(dat.quantiles, measure.vars=colnames(dat.quantiles[,-1]))
+dat.background2 <- dcast(dat.background, Sample~variable)
+
+
+g.intensity_density <- ggplot(dat.long, linetype='solid', aes(x=Intensity)) +
+    geom_density(fill='gray80') +
     theme_few() +
-    theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
-    labs(x='Sample', y='Log2(Intensitiy)') +
-    theme(strip.text.x.bottom = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
-        scale_y_continuous(position='right') +
-        theme(axis.text.y.right=element_text(angle=90, hjust=0.5)) +
-    theme(axis.title.x.bottom = element_text(angle = 180, hjust=0.5, vjust=0.5)) +
-    theme(axis.title.y.right = element_text(angle = 90, hjust=0.5, vjust=0.5)) 
+    facet_grid(Sample~., switch='y') +
+    geom_vline(xintercept=intensity_median, color='red') +
+    geom_vline(data=dat.quantiles, linetype='solid',  alpha=0.7, aes(xintercept=q50))+
+    geom_vline(data=dat.quantiles, linetype='dashed', alpha=0.7,  aes(xintercept=q25))+
+    geom_vline(data=dat.quantiles, linetype='dashed', alpha=0.7,  aes(xintercept=q75))+
+    geom_vline(data=dat.quantiles, linetype='dotted', alpha=0.7,  aes(xintercept=q025))+
+    geom_vline(data=dat.quantiles, linetype='dotted', alpha=0.7,  aes(xintercept=q975))+
+    theme(strip.text.y.left = element_text(angle = 0, hjust=0.5, vjust=0.5)) +
+    theme(axis.text.y=element_blank(), axis.ticks.y=element_blank(), axis.title.y=element_blank()) +
+    labs(x='Log2(Intensity)', title='Intensity Distribution across Samples') +
+    geom_label(data=dat.legend, aes(x=value, y=0.285, label=qlabel)) +
+    theme(panel.border = element_blank()) +
+    ylim(0,0.3)
+
+ggsave(g.intensity_density, filename=paste0(QC_dir, 'intensity_density.png'), height=10, width=30, units='cm')
 
 
 
-ggsave(g.intensity_beeswarm, filename=paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
 
-tmpimage <- image_read(paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
-image_rotate(tmpimage, 90) %>% image_write(paste0(QC_dir, 'intensity_beeswarm.png'))
-file.remove(paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
-
-dat.long[, Sample := factor(Sample, levels=decreasing_levels)]
-
-g.intensity_boxplot <- ggplot(dat.long, aes(x=Sample, y=Intensity)) +
-    geom_boxplot() +
-    theme_few() +
-    coord_flip() +
-    labs(x='Sample', y='Log2(Intensity)')
-ggsave(g.intensity_boxplot, filename=paste0(QC_dir, 'intensity_boxplot.png'))
+#### PROTEIN DISTRIBUTION ##########################################################################
 
 ###protein distribution
 df_pro_dis=melt(pro[,grep('mzML',colnames(pro))])
@@ -347,7 +392,31 @@ if (ncol(pro)>50){
 }else{
     ggsave(plot = p,filename = paste0(QC_dir,opt$prefix,"_log10_protein_intensity.pdf"))
 }
-  
+
+#### Pairwise correlations between sample columns
+dt.samples <- dat[,-c(1:3)]
+dt.corrs <- cor(as.matrix(na.omit(dt.samples)), method='spearman')
+dt.corrs[lower.tri(dt.corrs, diag=T)] <- NA
+dt.corrs <- as.data.table(dt.corrs, keep.rownames=T)
+dt.corrs <- melt(dt.corrs, measure.vars=dt.corrs[,rn], value.name='Spearman')
+dt.corrs <- dt.corrs[! is.na(Spearman)]
+setnames(dt.corrs, c('rn', 'variable'), c('SampleA','SampleB'))
+dt.corrs[, txtlabel := format(Spearman, digits=3)]
+
+
+g.heatmap <- ggplot(dt.corrs, aes(x=SampleA, y=SampleB, fill=Spearman, label=txtlabel)) +
+geom_tile() +
+geom_text()
+
+
+
+quit()
+
+
+
+
+######### STOP HERE
+
   ###correlation for pro
 pro_cor=pro
 pro_cor[is.na(pro_cor)]=0

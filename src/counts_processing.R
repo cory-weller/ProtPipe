@@ -16,6 +16,9 @@ if(all((lapply(package_list, require, character.only=TRUE)))) {
 }
 options(warn = defaultW)    # Turn warnings back on
 
+#### DEFAULTS ######################################################################################
+log2_intensity_min_threshold <- 0
+
 #### FUNCTIONS #####################################################################################
 # Within data.table `DT`, 
 # for `sdcols` specified columns, 
@@ -51,6 +54,7 @@ standardize_format <- function(DT) {
     DT[]
 }
 
+
 melt_table <- function(DT) {
     info_cols <- c('Protein_Groups', 'Genes', 'First_Protein_Description')
     DT.long <- melt(DT, 
@@ -58,6 +62,95 @@ melt_table <- function(DT) {
     variable.name='Sample',
     value.name='Intensity')
     return(DT.long)
+}
+
+filter_intensity <- function(DT, threshold) {
+    return(DT[Intensity > threshold])
+}
+
+
+plot_density <- function(DT) {
+    dat.quantiles <- DT[, list(
+                    'q025'=quantile(Intensity, 0.025),
+                    'q25'=quantile(Intensity, 0.25),
+                    'q50'=quantile(Intensity, 0.50),
+                    'q75'=quantile(Intensity, 0.75),
+                    'q975'=quantile(Intensity, 0.975)
+                    ), by=Sample]
+
+    dat.legend <- melt(dat.quantiles[which.min(as.numeric(Sample))], measure.vars=colnames(dat.quantiles[,-1]))
+    dat.legend[, qlabel := tstrsplit(variable, split='q')[2]]
+    dat.legend[, qlabel := paste0('0.', qlabel)]
+    dat.legend[, qlabel := as.numeric(qlabel)]
+
+    g <- ggplot(DT, linetype='solid', aes(x=Intensity)) +
+        geom_density(fill='gray80') +
+        theme_few() +
+        facet_grid(Sample~., switch='y') +
+        geom_vline(xintercept=intensity_median, color='red') +
+        geom_vline(data=dat.quantiles, linetype='solid',  alpha=0.7, aes(xintercept=q50))+
+        geom_vline(data=dat.quantiles, linetype='dashed', alpha=0.7,  aes(xintercept=q25))+
+        geom_vline(data=dat.quantiles, linetype='dashed', alpha=0.7,  aes(xintercept=q75))+
+        geom_vline(data=dat.quantiles, linetype='dotted', alpha=0.7,  aes(xintercept=q025))+
+        geom_vline(data=dat.quantiles, linetype='dotted', alpha=0.7,  aes(xintercept=q975))+
+        theme(strip.text.y.left = element_text(angle = 0, hjust=0.5, vjust=0.5)) +
+        theme(axis.text.y=element_blank(), axis.ticks.y=element_blank(), axis.title.y=element_blank()) +
+        labs(x='Log2(Intensity)', title='Intensity Distribution across Samples') +
+        geom_label(data=dat.legend, aes(x=value, y=0.285, label=qlabel)) +
+        theme(panel.border = element_blank()) +
+        ylim(0,0.3)
+
+    return(g)
+}
+
+median_normalize_intensity <- function(DT) {
+    # Get global median of intensity values
+    global_median <- median(DT[, Intensity])
+    DT[, 'sample_median' := median(Intensity), by=Sample]
+    DT[, 'global_median' := global_median]
+    DT[, 'NormInt' := Intensity - (sample_median - global_median)]
+    DT[, c('Intensity', 'sample_median', 'global_median') := NULL]
+    setnames(DT, 'NormInt', 'Intensity')
+    return(DT[])
+}
+
+plot_correlation_heatmap <- function(DT) {
+    g <- ggplot(DT, aes(x=SampleA, y=SampleB, fill=Spearman, label=Spearman)) +
+    geom_tile() +
+    geom_text(color='gray10') + 
+    theme_few() +
+    scale_fill_gradient2(low = "skyblue", high = "tomato1", mid = "white", 
+                        midpoint = mid_limit, limit = c(min_limit,max_limit),
+                        space = "Lab", breaks=c(min_limit, mid_limit, max_limit),
+                        name="Spearman\nCorrelation\n") +
+    theme(axis.text.x=element_text(angle=45, hjust=1)) +
+    theme(axis.title.x=element_blank(), axis.title.y=element_blank())
+
+    return(g)
+}
+
+
+get_correlations <- function(DT) {
+    #### Pairwise correlations between sample columns
+    dt.samples <- DT[,-c(1:3)]     # Ignore info columns (subset to only intensity values)
+    dt.corrs <- cor(as.matrix(na.omit(dt.samples)), method='spearman')  
+
+    # Convert to lower triangle only
+    # (no need for full correlation matrix with diagonal or repeated comparisons)
+    dt.corrs[lower.tri(dt.corrs, diag=T)] <- NA
+    dt.corrs <- as.data.table(dt.corrs, keep.rownames=T)
+    dt.corrs <- melt(dt.corrs, measure.vars=dt.corrs[,rn], value.name='Spearman')
+    dt.corrs <- dt.corrs[! is.na(Spearman)]
+    setnames(dt.corrs, c('rn', 'variable'), c('SampleA','SampleB'))
+
+    # Format correlations as 3 digits
+    dt.corrs[, Spearman := as.numeric(format(Spearman, digits=3))]
+
+    # Adjust levels such that both axes plot samples in the same order
+    dt.corrs.levels <- sort(as.character(unique(dat.long$Sample)))
+    dt.corrs[, SampleA := factor(SampleA, levels=dt.corrs.levels)]
+    dt.corrs[, SampleB := factor(SampleB, levels=dt.corrs.levels)]
+    return(dt.corrs[])
 }
 
 
@@ -85,6 +178,12 @@ option_list = list(
             pwd,
             sep=optparse_indent
         )
+    ),
+    make_option(
+        "--base",
+        dest="log_base",
+        default=2, 
+        help='Base for log transformation of intensity data. Default: 2'
     ),
     make_option(
         "--normalize",
@@ -142,7 +241,9 @@ if(FALSE) {
     opt$pgfile <- 'output/report.pg_matrix.tsv'
     opt$outdir <- 'output'
     opt$design <- 'example/design_matrix.csv'
+    opt$log_base <- 2
     opt$dry <- FALSE
+    opt$normalize <- TRUE
 }
 
 
@@ -203,9 +304,9 @@ tryCatch(
 
 print(dat.long)
 
-cat(paste0('INFO: Applying log2(value+1) to intensities\n'))
+cat(paste0('INFO: Applying log[base', log_base, '](value+1) transformation to intensities\n'))
 tryCatch(
-    dat.long[, Intensity := log2(Intensity + 1)],
+    dat.long[, Intensity := log((Intensity + 1), base=opt$log_base)],
     error = function(e){
         cat('ERROR: failed!\n')
         quit(status=1)
@@ -218,6 +319,16 @@ print(dat.long)
 cat(paste0('INFO: Converting NA Intensities to 0\n'))
 tryCatch(
     dat.long[is.na(Intensity), Intensity := 0],
+    error = function(e){
+        cat('ERROR: failed!\n')
+        quit(status=1)
+    },
+    finally = cat('')
+)
+
+cat(paste0('INFO: Filtering to only nonzero Intensity values\n'))
+tryCatch(
+    dat.long <- dat.long[Intensity != 0],
     error = function(e){
         cat('ERROR: failed!\n')
         quit(status=1)
@@ -302,8 +413,10 @@ decreasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][ord
 
 dat.long[, Sample := factor(Sample, levels=increasing_levels)]
 
-intensity_median <- median(dat.long[, Intensity])
+dat.long <- filter_intensity(dat.long, intensity_min_threshold)
 
+intensity_median <- median(dat.long[, Intensity])
+n_samples <- length(unique(dat.long[,Sample]))
 # g.intensity_beeswarm <- ggplot(dat.long, aes(x=0, y=Intensity)) +
 #     geom_beeswarm() +
 #     facet_wrap(Sample~., strip.position=c('bottom')) +
@@ -347,9 +460,6 @@ dat.legend[, qlabel := tstrsplit(variable, split='q')[2]]
 dat.legend[, qlabel := paste0('0.', qlabel)]
 dat.legend[, qlabel := as.numeric(qlabel)]
 
-dat.background <- melt(dat.quantiles, measure.vars=colnames(dat.quantiles[,-1]))
-dat.background2 <- dcast(dat.background, Sample~variable)
-
 
 g.intensity_density <- ggplot(dat.long, linetype='solid', aes(x=Intensity)) +
     geom_density(fill='gray80') +
@@ -368,45 +478,56 @@ g.intensity_density <- ggplot(dat.long, linetype='solid', aes(x=Intensity)) +
     theme(panel.border = element_blank()) +
     ylim(0,0.3)
 
-ggsave(g.intensity_density, filename=paste0(QC_dir, 'intensity_density.png'), height=10, width=30, units='cm')
-
+ggsave(g.intensity_density, filename=paste0(QC_dir, 'intensity_density.png'), height=2.5*n_samples, width=30, units='cm')
 
 
 
 #### PROTEIN DISTRIBUTION ##########################################################################
-
-###protein distribution
-df_pro_dis=melt(pro[,grep('mzML',colnames(pro))])
-df_pro_dis=na.omit(df_pro_dis)
-df_pro_dis$variable=gsub('.mzML','',df_pro_dis$variable)
-df_pro_dis$value=log10(df_pro_dis$value+1)
-median=log10(median(na.omit(pro[,grep('mzML',colnames(pro))][,1]))+1)
-p=ggplot(df_pro_dis, aes(x=variable, y=value)) + 
-    geom_boxplot(outlier.shape = NA, fill="steelblue")+
-    theme_classic()+
-    labs(fill = "",x="",y='Log10(Protein intensity)')+
-    scale_x_discrete(guide = guide_axis(angle = 90)) + 
-    geom_hline(yintercept=median, linetype="dashed", color = "red")
-if (ncol(pro)>50){
-    ggsave(plot = p,filename = paste0(QC_dir,opt$prefix,"_log10_protein_intensity.pdf"),width = ncol(pro)/10,height =6)
-}else{
-    ggsave(plot = p,filename = paste0(QC_dir,opt$prefix,"_log10_protein_intensity.pdf"))
-}
-
 #### Pairwise correlations between sample columns
-dt.samples <- dat[,-c(1:3)]
-dt.corrs <- cor(as.matrix(na.omit(dt.samples)), method='spearman')
+dt.samples <- dat[,-c(1:3)]     # Ignore info columns (subset to only intensity values)
+dt.corrs <- cor(as.matrix(na.omit(dt.samples)), method='spearman')  
+
+# Convert to lower triangle only
+# (no need for full correlation matrix with diagonal or repeated comparisons)
 dt.corrs[lower.tri(dt.corrs, diag=T)] <- NA
 dt.corrs <- as.data.table(dt.corrs, keep.rownames=T)
 dt.corrs <- melt(dt.corrs, measure.vars=dt.corrs[,rn], value.name='Spearman')
 dt.corrs <- dt.corrs[! is.na(Spearman)]
 setnames(dt.corrs, c('rn', 'variable'), c('SampleA','SampleB'))
-dt.corrs[, txtlabel := format(Spearman, digits=3)]
 
+# Format correlations as 3 digits
+dt.corrs[, Spearman := as.numeric(format(Spearman, digits=3))]
 
-g.heatmap <- ggplot(dt.corrs, aes(x=SampleA, y=SampleB, fill=Spearman, label=txtlabel)) +
+# Adjust levels such that both axes plot samples in the same order
+dt.corrs.levels <- sort(as.character(unique(dat.long$Sample)))
+dt.corrs[, SampleA := factor(SampleA, levels=dt.corrs.levels)]
+dt.corrs[, SampleB := factor(SampleB, levels=dt.corrs.levels)]
+
+# Output correlation tsv
+fwrite(dt.corrs, file=paste0(QC_dir, 'sample_correlation.tsv'), quote=F, row.names=F, col.names=T, sep='\t')
+
+# Get gradient limits for heathap
+max_limit <- max(dt.corrs$Spearman)
+min_limit <- min(dt.corrs$Spearman)
+mid_limit <- as.numeric(format(((max_limit + min_limit) / 2), digits=3))
+
+# Plot
+g.heatmap <- ggplot(dt.corrs, aes(x=SampleA, y=SampleB, fill=Spearman, label=Spearman)) +
 geom_tile() +
-geom_text()
+geom_text(color='gray10') + 
+theme_few() +
+scale_fill_gradient2(low = "skyblue", high = "tomato1", mid = "white", 
+                    midpoint = mid_limit, limit = c(min_limit,max_limit),
+                    space = "Lab", breaks=c(min_limit, mid_limit, max_limit),
+                    name="Spearman\nCorrelation\n") +
+theme(axis.text.x=element_text(angle=45, hjust=1)) +
+theme(axis.title.x=element_blank(), axis.title.y=element_blank())
+
+# Output heatmap
+ggsave(g.heatmap, filename=paste0(QC_dir, 'sample_correlation.png'), height=1.2*n_samples, width=2*n_samples, units='cm')
+
+g.heatmap <- plot_correlation_heatmap(dt.corrs)
+ggsave(g.heatmap, filename=paste0(QC_dir, 'sample_correlation.png'), height=1.2*n_samples, width=2*n_samples, units='cm')
 
 
 
@@ -414,72 +535,34 @@ quit()
 
 
 
+plot_density(dat.long)
+
+
+
+
 
 ######### STOP HERE
 
-  ###correlation for pro
-pro_cor=pro
-pro_cor[is.na(pro_cor)]=0
-cor_matrix = cor(as.matrix(na.omit(pro[,grep('mzML',colnames(pro))])),method = "spearman")
-df_pro_cor=melt(cor_matrix)
-df_pro_cor$value=round(df_pro_cor$value,2)
-df_pro_cor$Var1=gsub('.mzML','',df_pro_cor$Var1)
-df_pro_cor$Var2=gsub('.mzML','',df_pro_cor$Var2)
-write.csv(cor_matrix,paste0(QC_dir,opt$prefix,"_correlation.csv"))
-if (ncol(cor_matrix)< 20) {
-    p=ggplot(data=df_pro_cor,aes(Var1, Var2, fill = value)) + 
-        geom_tile(color = "black")+
-        theme_classic()+
-        scale_fill_gradient(low = '#f7fbff', high ='#08306b'  ) +
-        geom_text(aes(label = value))+
-        coord_fixed()+
-        scale_x_discrete(guide = guide_axis(angle = 90)) + 
-        xlab("") +
-        ylab("")+
-        labs(fill = "Correlation")
-    ggsave(filename = paste0(QC_dir,opt$prefix,"_correlation.pdf"),
-           plot = p,width = 6,height = 6)
-}else {
-    p=ggplot(data=df_pro_cor,aes(Var1, Var2, fill = value)) + 
-        geom_tile(color = "black")+
-        theme_classic()+
-        scale_fill_gradient(low = '#f7fbff', high ='#08306b' ) +
-        coord_fixed()+
-        scale_x_discrete(guide = guide_axis(angle = 90)) + 
-        xlab("") +
-        ylab("")+
-        labs(fill = "Correlation")
-    ggsave(filename = paste0(QC_dir,opt$prefix,"_correlation.pdf"),plot = p,width = ncol(pro)/4,height = ncol(pro)/4)
+design <- fread(opt$design)
+conditions <- unique(design$condition)
+
+median_correlations <- foreach(i=conditions, .combine='rbind') %do% {
+    dt.corrs[SampleA %like% i | SampleB %like% i, list('Condition'=i, 'median_correlation'=median(Spearman))]
 }
 
 
-##peptide QC
-  ###peptide number---------------------------------------------------------------------
-df=data.frame(sample = colnames(pep)[grep('mzML',colnames(pep))],
-                pep.num = (nrow(pep)-apply(pep[,grep('mzML',colnames(pep))],2,function(x) sum(is.na(x)))))
-df$sample=gsub('.mzML','',df$sample)
-p=ggplot(data=df, aes(x=sample, y=pep.num)) +
-    geom_bar(stat="identity", fill="steelblue")+
-    theme_classic()+
-    labs(fill = "",x="",y='#Peptide number')+
-    scale_x_discrete(guide = guide_axis(angle = 90)) + 
-    geom_hline(yintercept=floor(mean(df$pep.num)/10000)*10000, linetype="dashed", color = "red")
-ggsave(plot = p,filename = paste0(QC_dir,opt$prefix,"_peptide_number.pdf"))
-  
-  
-##peptide distribution
-df=melt(pep[,grep('mzML',colnames(pep))])
-df=na.omit(df)
-df$variable=gsub('.mzML','',df$variable)
-df$value=log10(df$value+1)
-median=log10(median(na.omit(pep[,grep('mzML',colnames(pep))][,1]))+1)
-p=ggplot(df, aes(x=variable, y=value)) + 
-    geom_boxplot(outlier.shape = NA, fill="steelblue")+
-    theme_classic()+
-    labs(fill = "",x="",y='Log10(Peptide intensity)')+
-    scale_x_discrete(guide = guide_axis(angle = 90)) + 
-    geom_hline(yintercept=median, linetype="dashed", color = "red")
-ggsave(filename = paste0(QC_dir,opt$prefix,"_log10_peptide_distribution.pdf"),plot = p)
+
+
+plot_density(median_normalize_intensity(dat.long))
+
+
+# Filter by minimum Log2(Intensity) ?
+
+## Filter samples with protein group count 
+
+## Exclude samples with N protein groups < 3 SD away from mean
+sd(dat.long[Intensity > 0, .N, by=Sample][,N])
+
 
 
 #filter sample by the correlation,and protein number----------------------------

@@ -28,7 +28,8 @@ log2_intensity_min_threshold <- 0
 # }
 
 
-standardize_format <- function(DT) {
+standardize_format <- function(DT.original) {
+    DT <- copy(DT.original)
     if("Protein.Ids" %in% colnames(DT)) {
         DT[, 'Protein.Ids' := NULL]
         DT[, 'Protein.Names' := NULL]
@@ -51,7 +52,7 @@ standardize_format <- function(DT) {
     extension_samplenames <-  colnames(DT)[colnames(DT) %like% extensions]
     trimmed_samplenames <- gsub(extensions, '', extension_samplenames)
     setnames(DT, extension_samplenames, trimmed_samplenames)
-    DT[]
+    return(DT[])
 }
 
 
@@ -69,7 +70,8 @@ filter_intensity <- function(DT, threshold) {
 }
 
 
-plot_density <- function(DT) {
+plot_density <- function(DT.original) {
+    DT <- copy(DT.original)
     dat.quantiles <- DT[, list(
                     'q025'=quantile(Intensity, 0.025),
                     'q25'=quantile(Intensity, 0.25),
@@ -103,7 +105,8 @@ plot_density <- function(DT) {
     return(g)
 }
 
-median_normalize_intensity <- function(DT) {
+median_normalize_intensity <- function(DT.original) {
+    DT <- copy(DT.original)
     # Get global median of intensity values
     global_median <- median(DT[, Intensity])
     DT[, 'sample_median' := median(Intensity), by=Sample]
@@ -114,7 +117,8 @@ median_normalize_intensity <- function(DT) {
     return(DT[])
 }
 
-plot_correlation_heatmap <- function(DT) {
+plot_correlation_heatmap <- function(DT.original) {
+    DT <- copy(DT.original)
     g <- ggplot(DT, aes(x=SampleA, y=SampleB, fill=Spearman, label=Spearman)) +
     geom_tile() +
     geom_text(color='gray10') + 
@@ -130,7 +134,8 @@ plot_correlation_heatmap <- function(DT) {
 }
 
 
-get_correlations <- function(DT) {
+get_correlations <- function(DT.original) {
+    DT <- copy(DT.original)
     #### Pairwise correlations between sample columns
     dt.samples <- DT[,-c(1:3)]     # Ignore info columns (subset to only intensity values)
     dt.corrs <- cor(as.matrix(na.omit(dt.samples)), method='spearman')  
@@ -536,6 +541,7 @@ quit()
 
 
 plot_density(dat.long)
+plot_density(median_normalize_intensity(dat.long))
 
 
 
@@ -553,7 +559,6 @@ median_correlations <- foreach(i=conditions, .combine='rbind') %do% {
 
 
 
-plot_density(median_normalize_intensity(dat.long))
 
 
 # Filter by minimum Log2(Intensity) ?

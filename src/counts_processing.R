@@ -17,7 +17,7 @@ if(all((lapply(package_list, require, character.only=TRUE)))) {
 options(warn = defaultW)    # Turn warnings back on
 
 #### DEFAULTS ######################################################################################
-log2_intensity_min_threshold <- 0
+intensity_min_threshold <- 0
 
 #### FUNCTIONS #####################################################################################
 # Within data.table `DT`, 
@@ -27,6 +27,28 @@ log2_intensity_min_threshold <- 0
 #   DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
 # }
 
+tryTo <- function(cmd, infomsg='', errormsg='ERROR: failed!') {
+    # tryTo is a simple tryCatch wrapper, taking a command + message.
+    # If the try block fails, an error is printed and R quits.
+    cat(paste0(infomsg, '\n'))
+    tryCatch(cmd, 
+        error = function(e){
+            cat(paste0(errormsg, '\n'))
+            quit(status=1)
+        },
+        finally = cat('')
+    )
+}
+
+ezwrite <- function(x, output_dir, output_filename) {
+    # Wrapper for fwrite that uses standard TSV output defaults.
+    # Concatenates output directory and filename for final output location.
+    fwrite(x, file=paste0(output_dir, '/', output_filename),
+        quote=F,
+        row.names=F,
+        col.names=T,
+        sep='\t')
+}
 
 standardize_format <- function(DT.original) {
     DT <- copy(DT.original)
@@ -69,9 +91,38 @@ filter_intensity <- function(DT, threshold) {
     return(DT[Intensity > threshold])
 }
 
+plot_pg_counts <- function(DT, output_dir, output_filename) {
+    n_samples <- nrow(DT)
+    g <- ggplot(DT, aes(x=Sample, y=N)) +
+                geom_bar(stat='identity', position='dodge', aes(y=N)) +
+                geom_text(aes(label=N, y=N + (0.05*max(pgcounts$N)))) +
+                coord_flip() +
+                theme_few() +
+                labs(x='Sample', y=paste0('N Protein Groups where Log[', opt$log_base, '](Intensity)> 0'))
+    ggsave(g,filename=paste0(output_dir, output_filename), width=20, height=2*n_samples, units='cm')
+}
 
-plot_density <- function(DT.original) {
+plot_pg_thresholds <- function(DT, output_dir, output_filename) {
+    # G
+    g <- ggplot(DT, aes(x=Threshold, y=N, color=Sample)) +
+            geom_line() +
+            geom_point(shape=21, alpha=0.5) +
+            theme_few() +
+            labs(x='Minimum Log2(Intensity) Threshold',
+            y=paste0('N Protein Groups where Log[', opt$log_base, '](Intensity)> 0')) 
+
+    ggsave(g,
+        filename=paste0(output_dir, output_filename),
+        width=20,
+        height=20,
+        units='cm'
+    )
+}
+
+plot_density <- function(DT.original, output_dir, output_filename) {
     DT <- copy(DT.original)
+    intensity_median <- median(DT[,Intensity])
+    n_samples <- length(unique(DT[,Sample]))
     dat.quantiles <- DT[, list(
                     'q025'=quantile(Intensity, 0.025),
                     'q25'=quantile(Intensity, 0.25),
@@ -97,12 +148,17 @@ plot_density <- function(DT.original) {
         geom_vline(data=dat.quantiles, linetype='dotted', alpha=0.7,  aes(xintercept=q975))+
         theme(strip.text.y.left = element_text(angle = 0, hjust=0.5, vjust=0.5)) +
         theme(axis.text.y=element_blank(), axis.ticks.y=element_blank(), axis.title.y=element_blank()) +
-        labs(x='Log2(Intensity)', title='Intensity Distribution across Samples') +
+        labs(x=paste0('Log[', opt$log_base, '](Intensity)'), title='Intensity Distribution across Samples') +
         geom_label(data=dat.legend, aes(x=value, y=0.285, label=qlabel)) +
         theme(panel.border = element_blank()) +
         ylim(0,0.3)
 
-    return(g)
+    ggsave(g, 
+        filename=paste0(output_dir, output_filename),
+        height=2.5*n_samples,
+        width=30,
+        units='cm'
+    )
 }
 
 median_normalize_intensity <- function(DT.original) {
@@ -117,9 +173,52 @@ median_normalize_intensity <- function(DT.original) {
     return(DT[])
 }
 
-plot_correlation_heatmap <- function(DT.original) {
-    DT <- copy(DT.original)
-    g <- ggplot(DT, aes(x=SampleA, y=SampleB, fill=Spearman, label=Spearman)) +
+plot_flip_beeswarm <- function(DT, output_dir, output_filename) {
+    n_samples <- length(unique(DT$Sample))
+    intensity_median <- median(DT[, Intensity])
+    dat.quantiles <- DT[, list(
+                'q025'=quantile(Intensity, 0.025),
+                'q25'=quantile(Intensity, 0.25),
+                'q50'=quantile(Intensity, 0.50),
+                'q75'=quantile(Intensity, 0.75),
+                'q975'=quantile(Intensity, 0.975)
+                ), by=Sample]
+
+    dat.legend <- melt(dat.quantiles[which.min(as.numeric(Sample))], measure.vars=colnames(dat.quantiles[,-1]))
+    dat.legend[, qlabel := tstrsplit(variable, split='q')[2]]
+    dat.legend[, qlabel := paste0('0.', qlabel)]
+    dat.legend[, qlabel := as.numeric(qlabel)]
+
+    g <- ggplot(DT, aes(x=0, y=Intensity)) +
+        geom_beeswarm(alpha=0.5, shape=21) +
+        facet_grid(.~Sample, switch='x') +
+        theme_few() +
+        geom_hline(data=dat.quantiles, color='gray50', linetype='solid',  alpha=0.7, aes(yintercept=q50))+
+        geom_hline(data=dat.quantiles, color='gray50', linetype='dashed', alpha=0.7,  aes(yintercept=q25))+
+        geom_hline(data=dat.quantiles, color='gray50', linetype='dashed', alpha=0.7,  aes(yintercept=q75))+
+        geom_hline(data=dat.quantiles, color='gray50', linetype='dotted', alpha=0.7,  aes(yintercept=q025))+
+        geom_hline(data=dat.quantiles, color='gray50', linetype='dotted', alpha=0.7,  aes(yintercept=q975))+
+        theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+        labs(x='Sample', y=paste0('Log[', opt$log_base, '](Intensity)')) +
+        theme(strip.text.x.bottom = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
+        scale_y_continuous(position='right') +
+        theme(axis.text.y.right=element_text(angle=90, hjust=0.5)) +
+        theme(axis.title.x.bottom = element_text(angle = 180, hjust=0.5, vjust=0.5)) +
+        theme(axis.title.y.right = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
+        geom_hline(yintercept=intensity_median, color='red', linetype='dashed', alpha=1)
+
+    ggsave(g, filename='.beeswarm.tmp.png', height=15, width=2*n_samples, units='cm')
+    tmpimage <- image_read('.beeswarm.tmp.png')
+    image_rotate(tmpimage, 90) %>% image_write(paste0(output_dir, output_filename))
+    file.remove('.beeswarm.tmp.png')
+}
+
+plot_correlation_heatmap <- function(DT.corrs, output_dir, output_filename) {
+    n_samples <- length(unique(DT.corrs[,SampleA]))
+    max_limit <- max(DT.corrs$Spearman)
+    min_limit <- min(DT.corrs$Spearman)
+    mid_limit <- as.numeric(format(((max_limit + min_limit) / 2), digits=3))
+    g <- ggplot(DT.corrs, aes(x=SampleA, y=SampleB, fill=Spearman, label=Spearman)) +
     geom_tile() +
     geom_text(color='gray10') + 
     theme_few() +
@@ -130,7 +229,11 @@ plot_correlation_heatmap <- function(DT.original) {
     theme(axis.text.x=element_text(angle=45, hjust=1)) +
     theme(axis.title.x=element_blank(), axis.title.y=element_blank())
 
-    return(g)
+    ggsave(g,
+    filename=paste0(output_dir, output_filename),
+    height=1.2*n_samples,
+    width=2*n_samples,
+    units='cm')
 }
 
 
@@ -157,6 +260,7 @@ get_correlations <- function(DT.original) {
     dt.corrs[, SampleB := factor(SampleB, levels=dt.corrs.levels)]
     return(dt.corrs[])
 }
+
 
 
 #### ARG PARSING ###################################################################################
@@ -271,268 +375,119 @@ if(! dir.exists(DA_dir)){
 
 #### IMPORT DATA ###################################################################################
 
-#read file----------------------------------------------------------------------
-##pro data,pep data and log2 transform pro data
-    
-cat(paste0('INFO: Reading input file ', opt$pgfile, '\n'))
-dat <- tryCatch(
-    fread(opt$pgfile),
-    error = function(e){
-        cat('ERROR: failed! Check file exists or errors in file path?\n')
-        quit(status=1)
-    },
-    finally = cat('')
+
+dat <- tryTo(
+    cmd=fread(opt$pgfile), 
+    infomsg=paste0('INFO: Reading input file ', opt$pgfile),
+    errormsg=paste0('ERROR: problem trying to load ', opt$pgfile, ', does it exist?')
 )
 
-cat(paste0('INFO: Normalizing data from ', opt$pgfile, '\n'))
-tryCatch(
-    standardize_format(dat),
-    error = function(e){
-        cat('ERROR: failed! Check for missing/corrupt headers?\n')
-        quit(status=1)
-    },
-    finally = cat('')
+dat <- tryTo(
+    cmd=standardize_format(dat), 
+    infomsg=paste0('INFO: Normalizing data from ', opt$pgfile), 
+    errormsg='ERROR: failed! Check for missing/corrupt headers?'
 )
 
-sample_names <- colnames(dat[, -c(1:3)])
-
-
-cat(paste0('INFO: Converting to long format\n'))
-tryCatch(
-    dat.long <- melt_table(dat),
-    error = function(e){
-        cat('ERROR: failed!\n')
-        quit(status=1)
-    },
-    finally = cat('')
+dat.long <- tryTo(
+    cmd=melt_table(dat), 
+    infomsg=paste0('INFO: Converting to long format'), 
+    errormsg='ERROR: failed!'
 )
 
-print(dat.long)
-
-cat(paste0('INFO: Applying log[base', log_base, '](value+1) transformation to intensities\n'))
-tryCatch(
-    dat.long[, Intensity := log((Intensity + 1), base=opt$log_base)],
-    error = function(e){
-        cat('ERROR: failed!\n')
-        quit(status=1)
-    },
-    finally = cat('')
+dat.long <- tryTo(
+    cmd=dat.long[, Intensity := log((Intensity + 1), base=opt$log_base)], 
+    infomsg=paste0('INFO: Applying Log[base', opt$log_base, '](value+1)',
+                'transformation to intensities'),
+    errormsg='ERROR: failed!'
 )
 
-print(dat.long)
-
-cat(paste0('INFO: Converting NA Intensities to 0\n'))
-tryCatch(
-    dat.long[is.na(Intensity), Intensity := 0],
-    error = function(e){
-        cat('ERROR: failed!\n')
-        quit(status=1)
-    },
-    finally = cat('')
+dat.long <- tryTo(
+    cmd=dat.long[is.na(Intensity), Intensity := 0], 
+    infomsg='INFO: Converting NA Intensities to 0',
+    errormsg='ERROR: failed!'
 )
 
-cat(paste0('INFO: Filtering to only nonzero Intensity values\n'))
-tryCatch(
-    dat.long <- dat.long[Intensity != 0],
-    error = function(e){
-        cat('ERROR: failed!\n')
-        quit(status=1)
-    },
-    finally = cat('')
+dat.long <- tryTo(
+    cmd=dat.long[Intensity != 0], 
+    infomsg='INFO: Filtering to only nonzero Intensity values',
+    errormsg='ERROR: failed!'
 )
-
-print(dat.long)
-
-
-#### GOOD THROUGH HERE #############################################################################
-#### 2023-02-21 11:04 am
-
-
 
 
 #### QC ############################################################################################
 
-
-
-
-#### PROTEIN GROUP COUNTS
-# pgcounts represents the distribution of Protein Groups with Intensity > 0
-# Visually, it is represented as a bar plot with x=sample, y=N, ordered by descending N
-# Get counts of [N=unique gene groups with `Intensity` > 0]
-pgcounts <- dat.long[, list('N'=sum(Intensity>0)), by=Sample]
-
-# Order samples by ascending counts
-pgcounts[, Sample := factor(Sample, levels=pgcounts[order(-N), Sample])]
-
-fwrite(pgcounts,
-    file=paste0(QC_dir, 'protein_group_nonzero_counts.tsv'),
-    quote=F,
-    row.names=F,
-    col.names=T,
-    sep='\t'
-)
-g.pgcounts <- ggplot(pgcounts, aes(x=Sample, y=N)) +
-                geom_bar(stat='identity', position='dodge', aes(y=N)) +
-                geom_text(aes(label=N, y=N + (0.05*max(pgcounts$N)))) +
-                coord_flip() +
-                theme_few() +
-                labs(x='Sample', y='N Protein Groups where Log2(Intensity) > 0')
-
-
-ggsave(g.pgcounts,
-    filename=paste0(QC_dir, 'protein_group_nonzero_counts.png')
-)
-
-#### THRESHOLDED PROTEIN GROUP COUNTS
-# pgthresholds represents the decay in number of unique protein groups per sample as
-# the minimum Intensity threshold is incremented. Visually represented as a line plot.
-pgthresholds <- foreach(threshold=0:(1+max(dat.long$Intensity)), .combine='rbind') %do% {
-    dat.tmp <- dat.long[, list('N'=sum(Intensity > threshold)), by=Sample]
-    dat.tmp[, 'Threshold' := threshold]
-    return(dat.tmp)
-}
-
-fwrite(pgthresholds,
-    file=paste0(QC_dir, 'protein_group_thresholds.tsv'),
-    quote=F,
-    row.names=F,
-    col.names=T,
-    sep='\t'
-)
-
-g.pgthresholds <- ggplot(pgthresholds, aes(x=Threshold, y=N, color=Sample)) +
-                    geom_line() +
-                    geom_point(shape=21, alpha=0.5) +
-                    theme_few() +
-                    labs(x='Minimum Log2(Intensity) Threshold', y='N Protein Groups where Log2(Intensity) > Threshold')
-
-ggsave(g.pgthresholds,
-    filename=paste0(QC_dir, 'protein_group_thresholds.png')
-)
-
-####
-####
-####
+## Filtering
 increasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][order(median), Sample]
-decreasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][order(-median), Sample]
-
+# decreasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][order(-median), Sample]
 dat.long[, Sample := factor(Sample, levels=increasing_levels)]
 
-dat.long <- filter_intensity(dat.long, intensity_min_threshold)
+dat.long <- tryTo(
+    cmd=filter_intensity(dat.long, intensity_min_threshold), 
+    infomsg=paste0('INFO: Applying Filter Log[', opt$log_base, '](Intensity) > ',
+                     intensity_min_threshold),
+    errormsg='ERROR: failed!'
+)
 
-intensity_median <- median(dat.long[, Intensity])
-n_samples <- length(unique(dat.long[,Sample]))
-# g.intensity_beeswarm <- ggplot(dat.long, aes(x=0, y=Intensity)) +
-#     geom_beeswarm() +
-#     facet_wrap(Sample~., strip.position=c('bottom')) +
-#     theme_few() +
-#     theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
-#     labs(x='Sample', y='Log2(Intensitiy)') +
-#     theme(strip.text.x.bottom = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
-#     scale_y_continuous(position='right') +
-#     theme(axis.text.y.right=element_text(angle=90, hjust=0.5)) +
-#     theme(axis.title.x.bottom = element_text(angle = 180, hjust=0.5, vjust=0.5)) +
-#     theme(axis.title.y.right = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
-#     geom_hline(yintercept=intensity_median, color='red', linetype='dashed', alpha=1) 
+dat.long.normalized <- tryTo(
+    cmd=median_normalize_intensity(dat.long), 
+    infomsg='INFO: Median-normalizing intensities',
+    errormsg='ERROR: failed!'
+)
 
-# ggsave(g.intensity_beeswarm, filename=paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
-
-# tmpimage <- image_read(paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
-# image_rotate(tmpimage, 90) %>% image_write(paste0(QC_dir, 'intensity_beeswarm.png'))
-# file.remove(paste0(QC_dir, 'intensity_beeswarm.tmp.png'))
-
-# dat.long[, Sample := factor(Sample, levels=increasing_levels)]
-
-# g.intensity_boxplot <- ggplot(dat.long, aes(x=Sample, y=Intensity)) +
-#     geom_boxplot() +
-#     theme_few() +
-#     coord_flip() +
-#     geom_hline(yintercept=intensity_median, color='red', linetype='dashed', alpha=1) +
-#     labs(x='Sample', y='Log2(Intensity)')
-# ggsave(g.intensity_boxplot, filename=paste0(QC_dir, 'intensity_boxplot.png'))
-
-dat.quantiles <- dat.long[, list(
-                'q025'=quantile(Intensity, 0.025),
-                'q25'=quantile(Intensity, 0.25),
-                'q50'=quantile(Intensity, 0.50),
-                'q75'=quantile(Intensity, 0.75),
-                'q975'=quantile(Intensity, 0.975)
-                ), by=Sample]
-
-
-dat.legend <- melt(dat.quantiles[which.min(as.numeric(Sample))], measure.vars=colnames(dat.quantiles[,-1]))
-dat.legend[, qlabel := tstrsplit(variable, split='q')[2]]
-dat.legend[, qlabel := paste0('0.', qlabel)]
-dat.legend[, qlabel := as.numeric(qlabel)]
-
-
-g.intensity_density <- ggplot(dat.long, linetype='solid', aes(x=Intensity)) +
-    geom_density(fill='gray80') +
-    theme_few() +
-    facet_grid(Sample~., switch='y') +
-    geom_vline(xintercept=intensity_median, color='red') +
-    geom_vline(data=dat.quantiles, linetype='solid',  alpha=0.7, aes(xintercept=q50))+
-    geom_vline(data=dat.quantiles, linetype='dashed', alpha=0.7,  aes(xintercept=q25))+
-    geom_vline(data=dat.quantiles, linetype='dashed', alpha=0.7,  aes(xintercept=q75))+
-    geom_vline(data=dat.quantiles, linetype='dotted', alpha=0.7,  aes(xintercept=q025))+
-    geom_vline(data=dat.quantiles, linetype='dotted', alpha=0.7,  aes(xintercept=q975))+
-    theme(strip.text.y.left = element_text(angle = 0, hjust=0.5, vjust=0.5)) +
-    theme(axis.text.y=element_blank(), axis.ticks.y=element_blank(), axis.title.y=element_blank()) +
-    labs(x='Log2(Intensity)', title='Intensity Distribution across Samples') +
-    geom_label(data=dat.legend, aes(x=value, y=0.285, label=qlabel)) +
-    theme(panel.border = element_blank()) +
-    ylim(0,0.3)
-
-ggsave(g.intensity_density, filename=paste0(QC_dir, 'intensity_density.png'), height=2.5*n_samples, width=30, units='cm')
+tryTo(
+    # pgcounts represents the distribution of Protein Groups with Intensity > 0
+    # Visually, it is represented as a bar plot with x=sample, y=N, ordered by descending N
+    # Get counts of [N=unique gene groups with `Intensity` > 0]
+    cmd={
+        pgcounts <- dat.long[, .N, by=Sample]
+        # Order samples by ascending counts
+        pgcounts[, Sample := factor(Sample, levels=pgcounts[order(-N), Sample])]
+        ezwrite(pgcounts, QC_dir, 'protein_group_nonzero_counts.tsv')
+        plot_pg_counts(pgcounts, QC_dir, 'protein_group_nonzero_counts.png')
+    }, 
+    infomsg='INFO: Tabulating protein group counts',
+    errormsg='ERROR: failed!'
+)
 
 
 
-#### PROTEIN DISTRIBUTION ##########################################################################
-#### Pairwise correlations between sample columns
-dt.samples <- dat[,-c(1:3)]     # Ignore info columns (subset to only intensity values)
-dt.corrs <- cor(as.matrix(na.omit(dt.samples)), method='spearman')  
+tryTo(
+    # pgthresholds represents the decay in number of unique protein groups per sample as
+    # the minimum Intensity threshold is incremented. Visually represented as a line plot.
+    cmd={
 
-# Convert to lower triangle only
-# (no need for full correlation matrix with diagonal or repeated comparisons)
-dt.corrs[lower.tri(dt.corrs, diag=T)] <- NA
-dt.corrs <- as.data.table(dt.corrs, keep.rownames=T)
-dt.corrs <- melt(dt.corrs, measure.vars=dt.corrs[,rn], value.name='Spearman')
-dt.corrs <- dt.corrs[! is.na(Spearman)]
-setnames(dt.corrs, c('rn', 'variable'), c('SampleA','SampleB'))
+        pgthresholds <- foreach(threshold=0:(1+max(dat.long$Intensity)), .combine='rbind') %do% {
+            dat.tmp <- dat.long[, list('N'=sum(Intensity > threshold)), by=Sample]
+            dat.tmp[, 'Threshold' := threshold]
+            return(dat.tmp)
+        }
+        ezwrite(pgthresholds, QC_dir, 'protein_group_thresholds.tsv')
+        plot_pg_thresholds(pgthresholds, QC_dir, 'protein_group_thresholds.png')
+    }, 
+    infomsg='INFO: Calculating protein group counts by minimum intensity thresholds',
+    errormsg='ERROR: failed!'
+)
 
-# Format correlations as 3 digits
-dt.corrs[, Spearman := as.numeric(format(Spearman, digits=3))]
 
-# Adjust levels such that both axes plot samples in the same order
-dt.corrs.levels <- sort(as.character(unique(dat.long$Sample)))
-dt.corrs[, SampleA := factor(SampleA, levels=dt.corrs.levels)]
-dt.corrs[, SampleB := factor(SampleB, levels=dt.corrs.levels)]
 
-# Output correlation tsv
-fwrite(dt.corrs, file=paste0(QC_dir, 'sample_correlation.tsv'), quote=F, row.names=F, col.names=T, sep='\t')
+tryTo(
+    cmd={
+        plot_flip_beeswarm(dat.long, QC_dir, 'intensity_beeswarm.png')
+        plot_flip_beeswarm(dat.long.normalized, QC_dir, 'intensity_beeswarm_normalized.png')
+        plot_density(dat.long, QC_dir, 'intensity_density.png')
+        plot_density(dat.long.normalized, QC_dir, 'intensity_density_normalized.png')
+    }, 
+    infomsg='INFO: Plotting intensity distributions',
+    errormsg='ERROR: failed!'
+)
 
-# Get gradient limits for heathap
-max_limit <- max(dt.corrs$Spearman)
-min_limit <- min(dt.corrs$Spearman)
-mid_limit <- as.numeric(format(((max_limit + min_limit) / 2), digits=3))
 
-# Plot
-g.heatmap <- ggplot(dt.corrs, aes(x=SampleA, y=SampleB, fill=Spearman, label=Spearman)) +
-geom_tile() +
-geom_text(color='gray10') + 
-theme_few() +
-scale_fill_gradient2(low = "skyblue", high = "tomato1", mid = "white", 
-                    midpoint = mid_limit, limit = c(min_limit,max_limit),
-                    space = "Lab", breaks=c(min_limit, mid_limit, max_limit),
-                    name="Spearman\nCorrelation\n") +
-theme(axis.text.x=element_text(angle=45, hjust=1)) +
-theme(axis.title.x=element_blank(), axis.title.y=element_blank())
 
-# Output heatmap
-ggsave(g.heatmap, filename=paste0(QC_dir, 'sample_correlation.png'), height=1.2*n_samples, width=2*n_samples, units='cm')
+dat.correlations <- get_correlations(dat)
 
-g.heatmap <- plot_correlation_heatmap(dt.corrs)
-ggsave(g.heatmap, filename=paste0(QC_dir, 'sample_correlation.png'), height=1.2*n_samples, width=2*n_samples, units='cm')
+ezwrite(dat.correlations, QC_dir, 'sample_correlation.tsv')
+
+plot_correlation_heatmap(dat.correlations, QC_dir, 'sample_correlation.png')
 
 
 

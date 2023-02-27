@@ -3,7 +3,7 @@
 #proteomics analysis for DIA-NN and Spectronaut quantity estimates
 
 #### PACKAGES ######################################################################################
-package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'magick',
+package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'magick', 'ggdendro',
                  'ggbeeswarm', 'ggrepel', 'optparse', 'ggthemes', 'foreach')
 cat("INFO: Loading required packages\n      ")
 cat(paste(package_list, collapse='\n      ')); cat('\n')
@@ -90,6 +90,15 @@ option_list = list(
             'Comma- or tab-delimited, three-column text file specifying the experimental design.',
             'File should contain headers. Header names do not matter; column order DOES matter.',
             'Columns order: <sample_name> <condition> <control>',
+            sep=optparse_indent
+        )
+    ),
+    make_option(
+        "--neighbors",
+        default=10,
+        type='numeric',
+        help=paste(
+            'N Neighbors to use for UMAP. Default: 10',
             sep=optparse_indent
         )
     ),
@@ -394,29 +403,35 @@ get_correlations <- function(DT.original) {
 
 get_PCs <- function(DT) {
     out <- list()
+    # Formatting prior to running PCA
     cluster.dat <- DT[,-c(1:3)]   # Subset to only sample intensity columns
     replace_NAs(cluster.dat, colnames(cluster.dat), 0)    # Replace NA values with 0
-    cluster.dat <- t(cluster.dat)
+    cluster.dat <- t(cluster.dat)                       # Transpose before PCA
     pca <- prcomp(cluster.dat, center = TRUE, scale. = TRUE)
+
+    # Format summary output
     out$summary <- as.data.table(t(summary(pca)$importance), keep.rownames=T)
     setnames(out$summary, c('component','stdv','percent','cumulative'))
+
+    # Format PCA output
     pca <- as.data.frame(pca$x)
     pca <- setDT(pca, keep.rownames=T)[]
     setnames(pca, 'rn', 'Sample')
+
+    # Merge in design matrix to add 'condition' column
     out$components <- merge(pca, design, by.x= 'Sample', by.y='sample_name')
     return(out)
 }
 
 plot_PCs <- function(PCA, output_dir, output_filename) {
-    PCA$summary
-    PCA$components
-
+    # Get % explained from PCA$summary table for PC1 and PC2
     pc1_label <- as.character(format(100*PCA$summary[component=='PC1', 'percent'], digits=3))
     pc1_label <- paste0('PC1: ', pc1_label, '%')
 
     pc2_label <- as.character(format(100*PCA$summary[component=='PC2', 'percent'], digits=3))
     pc2_label <- paste0('PC2: ', pc2_label, '%')
 
+    # Plot with 95% CI ellipse
     g <- ggplot(PCA$components, aes(x=PC1, y=PC2, color=condition)) +
         geom_point() +
         stat_ellipse(level=0.95) +
@@ -424,8 +439,36 @@ plot_PCs <- function(PCA, output_dir, output_filename) {
         labs(x=pc1_label, y=pc2_label)
 
     cat(paste0('   -> ', output_dir, output_filename, '\n'))
-   
     ggsave(g,filename=paste0(output_dir, output_filename), width=18, height=18, units='cm')
+}
+
+plot_hierarchical_cluster <- function(DT, output_dir, output_filename) {
+    dist_mat <- dist(t(DT[,-c(1:3)]))
+    n <- ncol(DT)-3
+    hc <- hclust(dist_mat, method = "complete")
+    g <- ggdendrogram(hc, rotate=TRUE) + labs(title='Hierarchical clustering')
+
+    cat(paste0('   -> ', output_dir, output_filename, '\n'))
+    ggsave(g, filename=paste0(output_dir, output_filename), height=n, width=15, units='cm')
+}
+
+
+get_umap <- function(DT.original, neighbors) {
+    DT <- t(DT.original[,-c(1:3)])
+    set.seed(100)
+    DT.umap <- umap(DT, n_neighbors=10)
+    DT.out <- as.data.table(DT.umap$layout, keep.rownames=TRUE)
+    setnames(DT.out, c('Sample', 'UMAP1', 'UMAP2'))
+    DT.out <- merge(DT.out, design, by.x='Sample', by.y='sample_name')
+    return(DT.out[])
+}
+
+plot_umap <- function(DT, output_dir, output_filename) {
+    g <- ggplot(DT, aes(x=UMAP1, y=UMAP2, color=condition)) +
+    geom_point() +
+    theme_few() 
+    cat(paste0('   -> ', output_dir, output_filename, '\n'))
+    ggsave(g, filename=paste0(output_dir, output_filename), height=15, width=20, units='cm')
 }
 
 #### MAKE DIRS #####################################################################################
@@ -594,116 +637,46 @@ tryTo('INFO: Identifying samples with protein group count outliers',{
 }, 'ERROR: failed!')
 
 
-quit()
+tryTo('INFO: Replacing NA values with 0',{
+    replace_NAs(dat, colnames(dat[,-c(1:3)]), 0)
+    dat.long[is.na(Intensity), Intensity := 0]
+}, 'ERROR: failed!')
 
 
 
 #### CLUSTERING ####################################################################################
 
-prcomp(t(as.matrix(dat[,-c(1:3)])), center = TRUE, scale. = TRUE)
 
-t(as.matrix(dat[,-c(1:3)]))
-
-## PCA
-
-## UMAP
-
-## CLUSTER
-
-
-
-
-
-tryTo('INFO: running PCA',{
+tryTo('INFO: running PCA and plotting first two components',{
     pca <- get_PCs(dat)
+    ezwrite(pca$components, cluster_dir, 'PCA.tsv')
+    ezwrite(pca$summary, cluster_dir, 'PCA_summary.tsv')
     plot_PCs(pca, cluster_dir, 'PCA.png')
 }, 'ERROR: failed!')
 
 
-
-tryTo('INFO: running UMAP ',{
-
-}, 'ERROR: failed!')
-
-tryTo('INFO: performing clustering',{
-
+tryTo('INFO: running Hierarchical Clustering',{
+    plot_hierarchical_cluster(dat, cluster_dir, 'hierarchical_cluster.png')
 }, 'ERROR: failed!')
 
 
 
-##cluster data(na=0)
-cluster_data=pro[,grep('mzML',colnames(pro))]
-cluster_data[is.na(cluster_data)]=0
-cluster_data=cluster_data[which(rowSums(cluster_data)>0),]
-log2_cluster_data=log2(cluster_data+1)
-
-##PCA and plot
-pca_data=t(log2_cluster_data)
-pca=prcomp(pca_data, center = TRUE, scale. = TRUE)#pca,remember if you use the sample to do the pca,you need to transpose
-pca_df = as.data.frame(pca$x)
-pca_df$Condition=gsub('_[1-9]*.mzML$','',rownames(pca_df))
-percentage=round(summary(pca)$importance[2,]*100, digits = 2)
-allcolour=c("#DC143C","#0000FF","#20B2AA","#FFA500","#9370DB","#1E90FF",
-            "#7CFC00","#FFFF00","#808000","#FF00FF","#FA8072","#7B68EE",
-            "#9400D3","#800080","#A0522D","#D2B48C","#D2691E","#87CEEB",
-            "#40E0D0","#5F9EA0","#FF1493","#0000CD","#008B8B","#FFE4B5",
-            "#8A2BE2","#228B22","#E9967A","#4682B4","#32CD32","#F0E68C",
-            "#FFFFE0","#EE82EE","#FF6347","#6A5ACD",
-            "#9932CC","#8B008B","#8B4513","#DEB887")
-p=ggplot(pca_df, aes(x = PC1, y = PC2, color = Condition)) +
-  geom_point(size=4)+
-  xlab(paste0("PC1","(",percentage[1],"%)")) +
-  ylab(paste0("PC2","(",percentage[2],"%)"))+
-  scale_color_manual(values = allcolour)+
-  theme_classic()+
-  stat_ellipse(level=0.95)
-ggsave(plot = p,filename = paste0(out_dir,opt$prefix,"_PCA_circle.pdf"),height = 5,width = 7)
-p=ggplot(pca_df, aes(x = PC1, y = PC2, color = Condition)) +
-  geom_point(size=4)+
-  xlab(paste0("PC1","(",percentage[1],"%)")) +
-  ylab(paste0("PC2","(",percentage[2],"%)"))+
-  scale_color_manual(values = allcolour)+
-  theme_classic()
-ggsave(plot = p,filename = paste0(out_dir,opt$prefix,"_PCA.pdf"),height = 5,width = 7)
+tryTo('INFO: running UMAP',{
+    umap <- get_umap(dat, opt$neighbors)
+    ezwrite(umap, cluster_dir, 'UMAP.tsv')
+    plot_umap(umap, cluster_dir, 'UMAP.png')
+}, 'ERROR: failed!')
 
 
-##hc
-dist_mat <- dist(t(log2_cluster_data)) #
-hc_cluster <- hclust(dist_mat,method = "complete")
-samplesname<- gsub('.mzML$','',colnames(log2_cluster_data))
-pdf(file =paste0(out_dir,opt$prefix,"_hc_cluster_log2.pdf"))
-plot(hc_cluster,cex=0.8,col="dark red",labels = samplesname,main="HC Cluster")
-dev.off()
-##mean to one
-data_in1 <- data.frame(row.names = rownames(log2_cluster_data))
-for (i in unique(gsub("_[1-9]*.mzML$",'',colnames(log2_cluster_data)))) {
-  tmp <- log2_cluster_data[,grep(i, colnames(log2_cluster_data)),]
-  tmp_i <- data.frame(rowMeans(tmp),row.names = rownames(log2_cluster_data))
-  colnames(tmp_i) <-i
-  data_in1 <- cbind(data_in1,tmp_i)
-}
-dist_mat <- dist(t(data_in1)) #
-hc_cluster <- hclust(dist_mat,method = "complete")
-samplesname<- colnames(data_in1)
-pdf(file = paste0(out_dir,opt$prefix,"_hc_cluster_log2_mean.pdf"))
-plot(hc_cluster,cex=0.8,col="dark red",labels = samplesname,main="HC Cluster")
-dev.off()
 
-##umap
-if (length(unique(gsub('_[1-9]*.mzML$','',colnames(log2_cluster_data)))) > 6) {
-  umap_data <- t(log2_cluster_data)
-  set.seed(100)
-  umap_out <- umap(umap_data)
-  umap_df <- as.data.frame(umap_out$layout) 
-  colnames(umap_df) <-c("UMAP1","UMAP2")
-  umap_df$Condition <- gsub('_[1-9]*.mzML$$','',rownames(umap_df))
-  
-  p=ggplot(umap_df) +
-    geom_point(aes(x=UMAP1, y=UMAP2, color=Condition),size=4)+
-    scale_color_manual(values = allcolour)+
-    theme_classic()
-  ggsave(plot = p,filename = paste0(out_dir,opt$prefix,"umap.pdf"),height = 5,width = 7)
-}
+
+
+
+
+quit()
+
+
+
 
 #DE analysis--------------------------------------------------------------------
 ##mkdir

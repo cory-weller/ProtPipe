@@ -27,13 +27,13 @@ intensity_min_threshold <- 0
 #   DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
 # }
 
-tryTo <- function(cmd, infomsg='', errormsg='ERROR: failed!') {
+tryTo <- function(infomsg='', cmd,  errormsg='ERROR: failed!') {
     # tryTo is a simple tryCatch wrapper, taking a command + message.
     # If the try block fails, an error is printed and R quits.
     cat(paste0(infomsg, '\n'))
     tryCatch(cmd, 
         error = function(e){
-            cat(paste0(errormsg, '\n'))
+            cat(paste0(errormsg, '\n', e))
             quit(status=1)
         },
         finally = cat('')
@@ -43,11 +43,13 @@ tryTo <- function(cmd, infomsg='', errormsg='ERROR: failed!') {
 ezwrite <- function(x, output_dir, output_filename) {
     # Wrapper for fwrite that uses standard TSV output defaults.
     # Concatenates output directory and filename for final output location.
+    cat(paste0('   -> ', output_dir, output_filename, '\n'))
     fwrite(x, file=paste0(output_dir, '/', output_filename),
         quote=F,
         row.names=F,
         col.names=T,
         sep='\t')
+    
 }
 
 standardize_format <- function(DT.original) {
@@ -56,7 +58,7 @@ standardize_format <- function(DT.original) {
         DT[, 'Protein.Ids' := NULL]
         DT[, 'Protein.Names' := NULL]
         setnames(DT, 'Protein.Group', 'Protein_Group')
-        setnames(DT, 'First.Protein.Description', 'Fist_Protein_Description')
+        setnames(DT, 'First.Protein.Description', 'First_Protein_Description')
     } else if('PG.ProteinGroups' %in% colnames(DT)) {
         setnames(DT, 'PG.ProteinGroups', 'Protein_Groups')
         setnames(DT, 'PG.Genes', 'Genes')
@@ -99,6 +101,8 @@ plot_pg_counts <- function(DT, output_dir, output_filename) {
                 coord_flip() +
                 theme_few() +
                 labs(x='Sample', y=paste0('N Protein Groups where Log[', opt$log_base, '](Intensity)> 0'))
+    cat(paste0('   -> ', output_dir, output_filename, '\n'))
+   
     ggsave(g,filename=paste0(output_dir, output_filename), width=20, height=2*n_samples, units='cm')
 }
 
@@ -110,7 +114,7 @@ plot_pg_thresholds <- function(DT, output_dir, output_filename) {
             theme_few() +
             labs(x='Minimum Log2(Intensity) Threshold',
             y=paste0('N Protein Groups where Log[', opt$log_base, '](Intensity)> 0')) 
-
+    cat(paste0('   -> ', output_dir, output_filename, '\n'))
     ggsave(g,
         filename=paste0(output_dir, output_filename),
         width=20,
@@ -152,7 +156,7 @@ plot_density <- function(DT.original, output_dir, output_filename) {
         geom_label(data=dat.legend, aes(x=value, y=0.285, label=qlabel)) +
         theme(panel.border = element_blank()) +
         ylim(0,0.3)
-
+    cat(paste0('   -> ', output_dir, output_filename, '\n'))
     ggsave(g, 
         filename=paste0(output_dir, output_filename),
         height=2.5*n_samples,
@@ -173,7 +177,7 @@ median_normalize_intensity <- function(DT.original) {
     return(DT[])
 }
 
-plot_flip_beeswarm <- function(DT, output_dir, output_filename) {
+plot_flip_beeswarm <- function(DT, output_dir, output_filename, plot_title) {
     n_samples <- length(unique(DT$Sample))
     intensity_median <- median(DT[, Intensity])
     dat.quantiles <- DT[, list(
@@ -199,18 +203,19 @@ plot_flip_beeswarm <- function(DT, output_dir, output_filename) {
         geom_hline(data=dat.quantiles, color='gray50', linetype='dotted', alpha=0.7,  aes(yintercept=q025))+
         geom_hline(data=dat.quantiles, color='gray50', linetype='dotted', alpha=0.7,  aes(yintercept=q975))+
         theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
-        labs(x='Sample', y=paste0('Log[', opt$log_base, '](Intensity)')) +
+        labs(title=plot_title, x='Sample', y=paste0('Log[', opt$log_base, '](Intensity)')) +
         theme(strip.text.x.bottom = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
         scale_y_continuous(position='right') +
         theme(axis.text.y.right=element_text(angle=90, hjust=0.5)) +
         theme(axis.title.x.bottom = element_text(angle = 180, hjust=0.5, vjust=0.5)) +
         theme(axis.title.y.right = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
         geom_hline(yintercept=intensity_median, color='red', linetype='dashed', alpha=1)
-
     ggsave(g, filename='.beeswarm.tmp.png', height=15, width=2*n_samples, units='cm')
     tmpimage <- image_read('.beeswarm.tmp.png')
+    cat(paste0('   -> ', output_dir, output_filename, '\n'))
     image_rotate(tmpimage, 90) %>% image_write(paste0(output_dir, output_filename))
-    file.remove('.beeswarm.tmp.png')
+    invisible(file.remove('.beeswarm.tmp.png')) # invisible suppresses 'TRUE' being printed
+
 }
 
 plot_correlation_heatmap <- function(DT.corrs, output_dir, output_filename) {
@@ -228,12 +233,13 @@ plot_correlation_heatmap <- function(DT.corrs, output_dir, output_filename) {
                         name="Spearman\nCorrelation\n") +
     theme(axis.text.x=element_text(angle=45, hjust=1)) +
     theme(axis.title.x=element_blank(), axis.title.y=element_blank())
-
+    cat(paste0('   -> ', output_dir, output_filename, '\n'))
     ggsave(g,
     filename=paste0(output_dir, output_filename),
     height=1.2*n_samples,
     width=2*n_samples,
     units='cm')
+
 }
 
 
@@ -376,42 +382,31 @@ if(! dir.exists(DA_dir)){
 #### IMPORT DATA ###################################################################################
 
 
-dat <- tryTo(
-    cmd=fread(opt$pgfile), 
-    infomsg=paste0('INFO: Reading input file ', opt$pgfile),
-    errormsg=paste0('ERROR: problem trying to load ', opt$pgfile, ', does it exist?')
+tryTo(paste0('INFO: Reading input file ', opt$pgfile),{
+    dat <- fread(opt$pgfile)
+}, paste0('ERROR: problem trying to load ', opt$pgfile, ', does it exist?')
 )
 
-dat <- tryTo(
-    cmd=standardize_format(dat), 
-    infomsg=paste0('INFO: Normalizing data from ', opt$pgfile), 
-    errormsg='ERROR: failed! Check for missing/corrupt headers?'
+tryTo(paste0('INFO: Normalizing data from ', opt$pgfile), {
+    dat <- standardize_format(dat)
+}, 'ERROR: failed! Check for missing/corrupt headers?'
 )
 
-dat.long <- tryTo(
-    cmd=melt_table(dat), 
-    infomsg=paste0('INFO: Converting to long format'), 
-    errormsg='ERROR: failed!'
+tryTo(paste0('INFO: Converting to long format'), {
+    dat.long <- melt_table(dat)
+}, 'ERROR: failed! Check for missing/corrupt headers?'
 )
 
-dat.long <- tryTo(
-    cmd=dat.long[, Intensity := log((Intensity + 1), base=opt$log_base)], 
-    infomsg=paste0('INFO: Applying Log[base', opt$log_base, '](value+1)',
-                'transformation to intensities'),
-    errormsg='ERROR: failed!'
+tryTo(paste0('INFO: Applying Log[base', opt$log_base, '](value+1)','transformation to intensities'),{
+    dat.long <- dat.long[, Intensity := log((Intensity + 1), base=opt$log_base)]
+},'ERROR: failed! Was your log base numeric and > 1?'
 )
 
-dat.long <- tryTo(
-    cmd=dat.long[is.na(Intensity), Intensity := 0], 
-    infomsg='INFO: Converting NA Intensities to 0',
-    errormsg='ERROR: failed!'
+tryTo('INFO: Excluding all unquantified or zero intensities', {
+    dat.long <- dat.long[! is.na(Intensity)][Intensity != 0]
+}, 'ERROR: failed!'
 )
 
-dat.long <- tryTo(
-    cmd=dat.long[Intensity != 0], 
-    infomsg='INFO: Filtering to only nonzero Intensity values',
-    errormsg='ERROR: failed!'
-)
 
 
 #### QC ############################################################################################
@@ -421,82 +416,96 @@ increasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][ord
 # decreasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][order(-median), Sample]
 dat.long[, Sample := factor(Sample, levels=increasing_levels)]
 
-dat.long <- tryTo(
-    cmd=filter_intensity(dat.long, intensity_min_threshold), 
-    infomsg=paste0('INFO: Applying Filter Log[', opt$log_base, '](Intensity) > ',
-                     intensity_min_threshold),
-    errormsg='ERROR: failed!'
+tryTo(paste0('INFO: Applying Filter Log[', opt$log_base, '](Intensity) > ',intensity_min_threshold),{
+    dat.long <- filter_intensity(dat.long, intensity_min_threshold)
+}, 'ERROR: failed!'
 )
 
-dat.long.normalized <- tryTo(
-    cmd=median_normalize_intensity(dat.long), 
-    infomsg='INFO: Median-normalizing intensities',
-    errormsg='ERROR: failed!'
+tryTo('INFO: Calculating median-normalized intensities',{
+    dat.long.normalized <- median_normalize_intensity(dat.long)
+}, 'ERROR: failed!'
 )
 
-tryTo(
-    # pgcounts represents the distribution of Protein Groups with Intensity > 0
-    # Visually, it is represented as a bar plot with x=sample, y=N, ordered by descending N
-    # Get counts of [N=unique gene groups with `Intensity` > 0]
-    cmd={
-        pgcounts <- dat.long[, .N, by=Sample]
-        # Order samples by ascending counts
-        pgcounts[, Sample := factor(Sample, levels=pgcounts[order(-N), Sample])]
-        ezwrite(pgcounts, QC_dir, 'protein_group_nonzero_counts.tsv')
-        plot_pg_counts(pgcounts, QC_dir, 'protein_group_nonzero_counts.png')
-    }, 
-    infomsg='INFO: Tabulating protein group counts',
-    errormsg='ERROR: failed!'
+tryTo('INFO: Plotting intensity distributions',{
+    plot_flip_beeswarm(dat.long, QC_dir, 'intensities.png', plot_title='Un-normalized intensities')
+    plot_flip_beeswarm(dat.long.normalized, QC_dir, 'intensities_normalized.png', plot_title='Median-normalized intensities')
+    # plot_density(dat.long, QC_dir, 'intensity_density.png')
+    # plot_density(dat.long.normalized, QC_dir, 'intensity_density_normalized.png')
+    dat.long <- dat.long.normalized
+}, 'ERROR: failed!'
+)
+
+tryTo('INFO: Re-generating wide format using normalized intensities',{
+    dat.long <- dat.long.normalized
+    dat <- dcast(dat.long, Protein_Group+Genes+First_Protein_Description~Sample, value.var='Intensity')
+}, 'ERROR: failed!'
 )
 
 
-
-tryTo(
-    # pgthresholds represents the decay in number of unique protein groups per sample as
-    # the minimum Intensity threshold is incremented. Visually represented as a line plot.
-    cmd={
-
-        pgthresholds <- foreach(threshold=0:(1+max(dat.long$Intensity)), .combine='rbind') %do% {
-            dat.tmp <- dat.long[, list('N'=sum(Intensity > threshold)), by=Sample]
-            dat.tmp[, 'Threshold' := threshold]
-            return(dat.tmp)
-        }
-        ezwrite(pgthresholds, QC_dir, 'protein_group_thresholds.tsv')
-        plot_pg_thresholds(pgthresholds, QC_dir, 'protein_group_thresholds.png')
-    }, 
-    infomsg='INFO: Calculating protein group counts by minimum intensity thresholds',
-    errormsg='ERROR: failed!'
+# pgcounts represents the distribution of Protein Groups with Intensity > 0
+# Visually, it is represented as a bar plot with x=sample, y=N, ordered by descending N
+# Get counts of [N=unique gene groups with `Intensity` > 0]
+tryTo('INFO: Tabulating protein group counts',{
+    pgcounts <- dat.long[, .N, by=Sample]
+    # Order samples by ascending counts
+    pgcounts[, Sample := factor(Sample, levels=pgcounts[order(-N), Sample])]
+    ezwrite(pgcounts, QC_dir, 'protein_group_nonzero_counts.tsv')
+    plot_pg_counts(pgcounts, QC_dir, 'protein_group_nonzero_counts.png')
+}, 'ERROR: failed!'
 )
 
-
-
-tryTo(
-    cmd={
-        plot_flip_beeswarm(dat.long, QC_dir, 'intensity_beeswarm.png')
-        plot_flip_beeswarm(dat.long.normalized, QC_dir, 'intensity_beeswarm_normalized.png')
-        plot_density(dat.long, QC_dir, 'intensity_density.png')
-        plot_density(dat.long.normalized, QC_dir, 'intensity_density_normalized.png')
-    }, 
-    infomsg='INFO: Plotting intensity distributions',
-    errormsg='ERROR: failed!'
+# pgthresholds represents the decay in number of unique protein groups per sample as
+# the minimum Intensity threshold is incremented. Visually represented as a line plot.
+tryTo('INFO: Calculating protein group counts by minimum intensity thresholds',{
+    pgthresholds <- foreach(threshold=0:(1+max(dat.long$Intensity)), .combine='rbind') %do% {
+        dat.tmp <- dat.long[, list('N'=sum(Intensity > threshold)), by=Sample]
+        dat.tmp[, 'Threshold' := threshold]
+        return(dat.tmp)
+    }
+    ezwrite(pgthresholds, QC_dir, 'protein_group_thresholds.tsv')
+    plot_pg_thresholds(pgthresholds, QC_dir, 'protein_group_thresholds.png')
+}, 'ERROR: failed!'
 )
 
 
 
-dat.correlations <- get_correlations(dat)
 
-ezwrite(dat.correlations, QC_dir, 'sample_correlation.tsv')
+tryTo('INFO: Plotting sample intensity correlations',{
+    dat.correlations <- get_correlations(dat)
+    ezwrite(dat.correlations, QC_dir, 'sample_correlation.tsv')
+    plot_correlation_heatmap(dat.correlations, QC_dir, 'sample_correlation.png')
+}, 'ERROR: failed!'
+)
 
-plot_correlation_heatmap(dat.correlations, QC_dir, 'sample_correlation.png')
 
+
+tryTo('INFO: Importing experimental design',{
+    design <- fread(opt$design)
+    print(design[])
+    conditions <- unique(design$condition)
+}, 'ERROR: failed!'
+)
+
+
+tryTo('INFO: ',{
+    # dcast long to wide
+}, 'ERROR: failed!'
+)
+
+tryTo('INFO: ',{
+
+}, 'ERROR: failed!'
+)
+
+tryTo('INFO: ',{
+
+}, 'ERROR: failed!'
+)
 
 
 quit()
 
 
-
-plot_density(dat.long)
-plot_density(median_normalize_intensity(dat.long))
 
 
 
@@ -504,8 +513,7 @@ plot_density(median_normalize_intensity(dat.long))
 
 ######### STOP HERE
 
-design <- fread(opt$design)
-conditions <- unique(design$condition)
+
 
 median_correlations <- foreach(i=conditions, .combine='rbind') %do% {
     dt.corrs[SampleA %like% i | SampleB %like% i, list('Condition'=i, 'median_correlation'=median(Spearman))]

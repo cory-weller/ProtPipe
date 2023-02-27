@@ -136,9 +136,9 @@ if(! opt$normalize %in% c('shift','scale','none')) {
 # Within data.table `DT`, 
 # for `sdcols` specified columns, 
 # replaces all NA with `newvalue`
-# replace_NAs <- function(DT, sdcols, newvalue) {
-#   DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
-# }
+replace_NAs <- function(DT, sdcols, newvalue) {
+  DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
+}
 
 tryTo <- function(infomsg='', cmd,  errormsg='ERROR: failed!') {
     # tryTo is a simple tryCatch wrapper, taking a command + message.
@@ -392,7 +392,41 @@ get_correlations <- function(DT.original) {
     return(dt.corrs[])
 }
 
+get_PCs <- function(DT) {
+    out <- list()
+    cluster.dat <- DT[,-c(1:3)]   # Subset to only sample intensity columns
+    replace_NAs(cluster.dat, colnames(cluster.dat), 0)    # Replace NA values with 0
+    cluster.dat <- t(cluster.dat)
+    pca <- prcomp(cluster.dat, center = TRUE, scale. = TRUE)
+    out$summary <- as.data.table(t(summary(pca)$importance), keep.rownames=T)
+    setnames(out$summary, c('component','stdv','percent','cumulative'))
+    pca <- as.data.frame(pca$x)
+    pca <- setDT(pca, keep.rownames=T)[]
+    setnames(pca, 'rn', 'Sample')
+    out$components <- merge(pca, design, by.x= 'Sample', by.y='sample_name')
+    return(out)
+}
 
+plot_PCs <- function(PCA, output_dir, output_filename) {
+    PCA$summary
+    PCA$components
+
+    pc1_label <- as.character(format(100*PCA$summary[component=='PC1', 'percent'], digits=3))
+    pc1_label <- paste0('PC1: ', pc1_label, '%')
+
+    pc2_label <- as.character(format(100*PCA$summary[component=='PC2', 'percent'], digits=3))
+    pc2_label <- paste0('PC2: ', pc2_label, '%')
+
+    g <- ggplot(PCA$components, aes(x=PC1, y=PC2, color=condition)) +
+        geom_point() +
+        stat_ellipse(level=0.95) +
+        theme_few() +
+        labs(x=pc1_label, y=pc2_label)
+
+    cat(paste0('   -> ', output_dir, output_filename, '\n'))
+   
+    ggsave(g,filename=paste0(output_dir, output_filename), width=18, height=18, units='cm')
+}
 
 #### MAKE DIRS #####################################################################################
 QC_dir <- paste0(opt$outdir, '/QC/')
@@ -527,19 +561,6 @@ tryTo('INFO: Importing experimental design',{
 }, 'ERROR: failed!')
 
 
-tryTo('INFO: running PCA',{
-    # dcast long to wide
-}, 'ERROR: failed!')
-
-tryTo('INFO: running UMAP ',{
-
-}, 'ERROR: failed!')
-
-tryTo('INFO: performing clustering',{
-
-}, 'ERROR: failed!')
-
-
 
 ## Exclude samples with N protein groups < opt$sds away from mean
 ## Default value: 3 standard deviations, modifiable with --sds [N]
@@ -579,7 +600,9 @@ quit()
 
 #### CLUSTERING ####################################################################################
 
-dat[,-c(1:3)]
+prcomp(t(as.matrix(dat[,-c(1:3)])), center = TRUE, scale. = TRUE)
+
+t(as.matrix(dat[,-c(1:3)]))
 
 ## PCA
 
@@ -591,8 +614,21 @@ dat[,-c(1:3)]
 
 
 
+tryTo('INFO: running PCA',{
+    pca <- get_PCs(dat)
+    plot_PCs(pca, cluster_dir, 'PCA.png')
+}, 'ERROR: failed!')
 
-cluster_dir
+
+
+tryTo('INFO: running UMAP ',{
+
+}, 'ERROR: failed!')
+
+tryTo('INFO: performing clustering',{
+
+}, 'ERROR: failed!')
+
 
 
 ##cluster data(na=0)

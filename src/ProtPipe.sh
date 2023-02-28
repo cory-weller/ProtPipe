@@ -57,7 +57,7 @@ fi
 # Check singularity image integrity
 r_version='r/4.0:1.3'
 r_sif="src/R.sif"
-r_sif_md5_desired='b052311c61f29e1815d5b7436a35b8a2'
+r_sif_md5_desired='f09066e783273ac200291fa7428d3ec3'
 if [ ! -f "${r_sif}" ]; then
     echo "INFO: Pulling ${r_sif} from remote library://wellerca/${r_version}" 
     singularity pull ${r_sif} library://wellerca/${r_version}
@@ -79,6 +79,8 @@ folder='output'
 singularity exec --cleanenv -H ${PWD} ${r_sif} Rscript ${diann_r_file} \
 --pgfile        ${folder}/report.pg_matrix.tsv \
 --out           ${folder} \
---design        example/design_matrix.csv
+--design        example/design_matrix.csv \
+--sds           3 \
+--normalize     scale
 
 

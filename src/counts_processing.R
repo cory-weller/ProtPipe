@@ -74,6 +74,29 @@ option_list = list(
         )
     ),
     make_option(
+        "--fdr",
+        dest = 'fdr_threshold',
+        default=0.05,
+        type='numeric',
+        help=paste(
+            'False Discovery Rate threshold for differential abundance analysis.',
+            'Default: 0.05',
+            sep=optparse_indent
+        )
+    ),
+    make_option(
+        "--foldchange",
+        dest = 'foldchange_min',
+        default=5,
+        type='numeric',
+        help=paste(
+            'Minimum LINEAR fold change [NOT log, as log base can be modified] for labeling',
+            'protein groups in differential abundance analysis. Default: 5 (equivalent to',
+            'log10 fold-change threshold of 0.699)',
+            sep=optparse_indent
+        )
+    ),
+    make_option(
         "--imputation",
         action = 'store_true',
         default=FALSE, 
@@ -119,7 +142,7 @@ opt <- parse_args(OptionParser(usage = usage_string, option_list))
 print(opt)
 
 
-if(TRUE) {
+if(FALSE) {
     opt <- list(); 
     opt$pgfile <- 'output/report.pg_matrix.tsv'
     opt$outdir <- 'output'
@@ -127,6 +150,8 @@ if(TRUE) {
     opt$log_base <- 2
     opt$dry <- FALSE
     opt$normalize <- 'shift'
+    opt$fdr_threshold <- 0.05
+    opt$foldchange <- 5
 }
 
 
@@ -139,6 +164,11 @@ if(! opt$normalize %in% c('shift','scale','none')) {
     cat("ERROR: --normalize must be 'shift' 'scale' or 'none'\n")
     quit(status=1)
 }
+
+opt$lfc_threshold <- log(opt$foldchange, base=opt$log_base)
+
+cat(paste0('INFO: LFC threshold of log[', opt$log_base, '](Intensity) > ', opt$lfc_threshold, '\n'))
+cat(paste0('INFO: FDR threshold of ', opt$fdr_threshold, '\n'))
 
 
 #### FUNCTIONS #####################################################################################
@@ -456,7 +486,7 @@ plot_hierarchical_cluster <- function(DT, output_dir, output_filename) {
 get_umap <- function(DT.original, neighbors) {
     DT <- t(DT.original[,-c(1:3)])
     set.seed(100)
-    DT.umap <- umap(DT, n_neighbors=10)
+    DT.umap <- umap(DT, n_neighbors=neighbors)
     DT.out <- as.data.table(DT.umap$layout, keep.rownames=TRUE)
     setnames(DT.out, c('Sample', 'UMAP1', 'UMAP2'))
     DT.out <- merge(DT.out, design, by.x='Sample', by.y='sample_name')
@@ -471,6 +501,66 @@ plot_umap <- function(DT, output_dir, output_filename) {
     ggsave(g, filename=paste0(output_dir, output_filename), height=15, width=20, units='cm')
 }
 
+run_contrast <- function(DT.all, treatment_sample_names, treatment, control)  {
+    control_sample_names <- colnames(DT.all)[colnames(DT.all) %like% control]
+    n_treatment <- length(treatment_sample_names)
+    n_controls <- length(control_sample_names)
+
+    info_cols <- colnames(DT.all)[1:3]
+    DT <- DT.all[, c(info_cols, treatment_sample_names, control_sample_names), with=F]
+
+    # Filter: protein groups with at least half of control and treatment samples having non-zero value
+    DT[, 'N_missing_treatment' := apply(.SD, 1, function(x) sum(x==0)), .SDcols=c(treatment_sample_names)]
+    DT[, 'N_missing_control' := apply(.SD, 1, function(x) sum(x==0)), .SDcols=c(control_sample_names)]
+    DT <- DT[N_missing_treatment < (n_treatment/2)]
+    DT <- DT[N_missing_control < (n_controls/2)]
+    DT.out <- copy(DT[, info_cols, with=F])
+    DT <- DT[, c(treatment_sample_names, control_sample_names), with=F]
+
+    # Run contrast
+    pvalue <- apply(DT, 1, function(x) {
+                                a = factor(c(rep(treatment, n_treatment), rep(control, n_controls)),
+                                    levels=c(treatment, control))
+                                fvalue = var.test(x~a)
+                                if (!is.na(fvalue$p.value)){
+                                    if (fvalue$p.value > 0.05) {
+                                        t.test(x~a, var.equal = TRUE)
+                                    } else {
+                                        t.test(x~a, var.equal = FALSE)
+                                    }
+                                }
+        }
+    )
+
+    DT.out[, p := as.numeric(unlist(lapply(pvalue,function(x) x$p.value)))]
+    DT.out[, q := p.adjust(p, method='BH', n=.N)]       # BH method to convert P to FDR (q) value
+    DT.out[, ratio := as.numeric(unlist(lapply(pvalue,function(x) x$estimate[1]/(x$estimate[2])))) ]
+    return(DT.out[])
+}
+
+plot_volcano <- function(DT.original, treatment, control, log_base, lfc_threshold, fdr_threshold, out_dir) {
+    DT <- copy(DT.original)
+    DT[, log_foldchange := log(ratio, base=log_base)]
+    log_lfc_threshold <- log(lfc_threshold, base=log_base)
+    DT[, labeltext := '']
+    g <- ggplot(DT, aes(x=log_foldchange, y=-1*log10(q))) +
+        geom_point() +
+        theme_few() +
+        geom_label_repel(aes(label=labeltext)) +
+        scale_y_log10() +
+        geom_hline(yintercept=fdr_threshold, linetype='dashed', alpha=0.5) +
+        geom_vline(xintercept=log_lfc_threshold, linetype='dashed', alpha=0.5) +
+        geom_vline(xintercept=(-1*log_lfc_threshold), linetype='dashed', alpha=0.5) +
+        labs(x=paste0('Log[', opt$log_base, '](Intensity) fold change'),
+                y='-Log[10](q)',
+                title=paste0(treatment, ' vs ', control)
+        )
+    output_filename <- paste0(treatment, '-vs-', control, '.png')
+    cat(paste0('   -> ', out_dir, output_filename, '\n'))
+    ggsave(g, filename=paste0(out_dir, output_filename), height=16, width=16, units='cm')
+}
+
+
 #### MAKE DIRS #####################################################################################
 QC_dir <- paste0(opt$outdir, '/QC/')
 if(! dir.exists(QC_dir)){
@@ -482,9 +572,9 @@ if(! dir.exists(cluster_dir)){
     dir.create(cluster_dir, recursive = T)
 }
 
-DA_dir <- paste0(opt$outdir, '/differential_intensity/')
-if(! dir.exists(DA_dir)){
-    dir.create(DA_dir, recursive = T)
+DI_dir <- paste0(opt$outdir, '/differential_intensity/')
+if(! dir.exists(DI_dir)){
+    dir.create(DI_dir, recursive = T)
 }
 
 #### IMPORT DATA ###################################################################################
@@ -597,12 +687,24 @@ tryTo('INFO: Plotting sample intensity correlations',{
 
 
 
-tryTo('INFO: Importing experimental design',{
+tryTo('INFO: Importing and validating experimental design\n',{
     design <- fread(opt$design)
     print(design[])
+    cat('\n')
     conditions <- unique(design$condition)
+    for (condition.i in conditions) {
+        samples <- design[condition == condition.i, sample_name]
+        control <- unique(design[condition == condition.i, control])
+        if (length(control) != 1) {
+            cat(paste0('ERROR: condition ', condition.i, ' maps to multiple controls: ', control, '\n'))
+            cat(paste0('       Check the design matrix and esure no more than one control label per condition\n'))
+            quit(exit=1)
+        } else {
+            cat(paste0('INFO: condition ', condition.i, ' maps to control ', control, '\n'))
+        }
+    }
+    cat(paste0('INFO: all conditions pass check (i.e. map to one control condition)\n'))
 }, 'ERROR: failed!')
-
 
 
 ## Exclude samples with N protein groups < opt$sds away from mean
@@ -620,8 +722,9 @@ tryTo('INFO: Identifying samples with protein group count outliers',{
         cat('\nINFO: No low group count samples to remove\n')
     } else {
         cat(paste0('\nINFO: Pruning low-count outlier ', low_count_samples))
-        cat('\n')
+        cat('\n\n')
         print(pgcounts[Sample %in% low_count_samples])
+        cat('\n')
         dat[, c(low_count_samples) := NULL]    # remove sample columns from wide table
         dat.long <- dat.long[! (Sample %in% low_count_samples)] # remove rows from long table
     }
@@ -669,96 +772,86 @@ tryTo('INFO: running UMAP',{
 
 
 
+#### DIFFERENTIAL INTENSITY ########################################################################
 
 
 
+
+tryTo('INFO: Running differential intensity contrasts',{
+    for (treatment in conditions) {
+        treatment_sample_names <- design[condition == treatment, sample_name]
+        control <- unique(design[condition == condition.i, control])
+        control_sample_names <- colnames(dat)[colnames(dat) %like% control]
+        
+        contrast <- run_contrast(dat, treatment_sample_names, treatment, control)
+        ezwrite(contrast, DI_dir, paste0(treatment, '-vs-', control, '.tsv'))
+        plot_volcano(contrast, treatment, control, opt$log_base, opt$lfc_threshold, opt$fdr_threshold, DI_dir)
+    }
+}, 'ERROR: failed!')
 
 quit()
 
 
 
 
-#DE analysis--------------------------------------------------------------------
-##mkdir
 
-if (!dir.exists(paste0(opt$outdir,"/DE_analysis/"))){
-  dir.create(paste0(opt$outdir,"/DE_analysis/"),recursive = T)
+
+
+
+
+
+
+
+
+
+
+options(ggrepel.max.overlaps=Inf)
+vol_plot=result_ttest
+vol_plot$Group <- "Others"
+vol_plot$Group[which(vol_plot$log2FC >= opt$lfc_threshold)] <-"UP"
+vol_plot$Group[which(vol_plot$log2FC <= -opt$lfc_threshold)] <-"DOWN"
+vol_plot$Group[which(vol_plot$adj.Pvalue >= fdr_cutoff)]<- "Others"
+up_gene_5 <- vol_plot[which(vol_plot$Group=="UP"),]
+up_gene_5 <- up_gene_5[order(up_gene_5$log2FC,decreasing = T)[1:5],]
+down_gene_5 <- vol_plot[which(vol_plot$Group=="DOWN"),]
+down_gene_5 <- down_gene_5[order(down_gene_5$log2FC,decreasing = F)[1:5],]
+top5_gene <- rbind(up_gene_5,down_gene_5)
+top5_gene <- top5_gene[!duplicated(top5_gene$Genes),]
 }
-out_dir=paste0(opt$outdir,"/DE_analysis/")
 
 
 
-if (!is.null(opt$design_matrix)){
-  ##read files
-  design_matrix=read.csv(opt$design_matrix)
-  ##parameters 
-  fdr_cutoff=0.05
-  lfc_cutoff=0.585
-  ##ttest
-  condition=unique(design_matrix$condition)
-  for (i in condition) {
-    data_i=pro[,grep(i,colnames(pro))]
-    data_control=pro[,grep(unique(design_matrix$control[which(design_matrix$condition == i)]),colnames(pro))]
-    data=cbind(data_i,data_control)
-    data[is.na(data)]=0
-    rownames(data)=pro$Protein.Group
-    rm=apply(data, 1, function(x){
-      sum(x == 0) > ncol(data)/2
-      })
-    df=data[!rm,]
-    df=df[apply(df,1, var) != 0, ]
-    df=df[apply(df[,grep(i,colnames(df))],1, var) != 0, ]
-    df=df[apply(df[,grep(unique(design_matrix$control[which(design_matrix$condition == i)]),colnames(df))],1, var) != 0, ]
-    pvalue=apply(df, 1, function(x){
-      a =factor(c(rep('treat',ncol(data_i)),
-                rep("control",ncol(data_control))),
-              levels = c('treat',"control"))
-      fvalue=var.test(x~a)
-      if (!is.na(fvalue$p.value)){ 
-        if (fvalue$p.value > 0.05){
-        t.test(x~a, var.equal = T)
-          }else{
-            t.test(x~a, var.equal = F)
-            }}
-      })
-    result_ttest=data.frame(ID=names(pvalue), 
-                          Pvalue = as.numeric(unlist(lapply(pvalue,function(x) x$p.value))),
-                          log2FC = log2(as.numeric(unlist(lapply(pvalue,function(x) x$estimate[1]/(x$estimate[2]+1))))))
-    result_ttest$adj.Pvalue=p.adjust(result_ttest$Pvalue, method = 'BH', n = length(result_ttest$Pvalue))
-    result_ttest= merge(df,result_ttest,by.x =0,by.y =1,all=F)
-    result_ttest =merge(pro[,-grep("mzML",colnames(pro))],result_ttest,by.x ='Protein.Group',by.y=1,all=F)
-    result_ttest=result_ttest[order(result_ttest$log2FC,decreasing = T),]
-    write.csv(result_ttest,file = paste0(out_dir,i,'_',unique(design_matrix$control[which(design_matrix$condition==i)]),'_ttest.csv'),row.names = F)
-    result_ttest <- na.omit(result_ttest)
-    options(ggrepel.max.overlaps=Inf)
-    vol_plot=result_ttest
-    vol_plot$Group <- "Others"
-    vol_plot$Group[which(vol_plot$log2FC >= lfc_cutoff)] <-"UP"
-    vol_plot$Group[which(vol_plot$log2FC <= -lfc_cutoff)] <-"DOWN"
-    vol_plot$Group[which(vol_plot$adj.Pvalue >= fdr_cutoff)]<- "Others"
-    up_gene_5 <- vol_plot[which(vol_plot$Group=="UP"),]
-    up_gene_5 <- up_gene_5[order(up_gene_5$log2FC,decreasing = T)[1:5],]
-    down_gene_5 <- vol_plot[which(vol_plot$Group=="DOWN"),]
-    down_gene_5 <- down_gene_5[order(down_gene_5$log2FC,decreasing = F)[1:5],]
-    top5_gene <- rbind(up_gene_5,down_gene_5)
-    top5_gene <- top5_gene[!duplicated(top5_gene$Genes),]
-    p=ggplot(vol_plot, aes(x = log2FC, y = -log10(adj.Pvalue))) +
-      geom_point(aes(color = Group)) +
-      scale_color_manual(values = c("blue", "grey","red"))  +
-      theme_bw(base_size = 12) + theme(legend.position = "bottom") +
-      geom_label_repel(
-        data = subset(top5_gene),
-        aes(label = Genes),
-        size = 5,
-        box.padding = unit(0.35, "lines"),
-        point.padding = unit(0.3, "lines"))+
-      geom_hline(yintercept=-log10(fdr_cutoff), linetype="dashed")+ 
-      geom_vline(xintercept=lfc_cutoff, linetype="dashed")+ 
-      geom_vline(xintercept=-lfc_cutoff, linetype="dashed")+
-      theme_classic()
-  
-      ggsave(file = paste0(out_dir,i,"_",unique(design_matrix$control[which(design_matrix$condition==i)]),"_top10_fdr0.05_fc1.5_vocal.pdf"),plot = p,width = 8,height = 8)
-      
-  }
-  }
+
+
+
+
+
+## Evaluate normalization with samples from very different batches?
+## Calculate differential intensities using DESeq2?
+## Function to compare q-values from spectronaut VS DIA-NN?
+
+
+
+
+
+
+
+
+
+p=ggplot(vol_plot, aes(x = log2FC, y = -log10(adj.Pvalue))) +
+    geom_point(aes(color = Group)) +
+    scale_color_manual(values = c("blue", "grey","red"))  +
+    theme_bw(base_size = 12) + theme(legend.position = "bottom") +
+    geom_label_repel(
+    data = subset(top5_gene),
+    aes(label = Genes),
+    size = 5,
+    box.padding = unit(0.35, "lines"),
+    point.padding = unit(0.3, "lines"))+
+    geom_hline(yintercept=-log10(fdr_cutoff), linetype="dashed")+ 
+    #geom_vline(xintercept=lfc_cutoff, linetype="dashed")+ 
+    #geom_vline(xintercept=-lfc_cutoff, linetype="dashed")+
+    theme_classic()
+
+    ggsave(file = paste0(out_dir,i,"_",unique(design$control[which(design$condition==i)]),"_top10_fdr0.05_fc1.5_vocal.pdf"),plot = p,width = 8,height = 8)
 

@@ -41,9 +41,9 @@ else
     echo "INFO: ${r_sif} md5 sum passes check"
 fi
 
-diann_r_file='src/counts_processing.R'
+r_processing_script='src/counts_processing.R'
 folder='output'
-singularity exec --cleanenv -H ${PWD} ${r_sif} Rscript ${diann_r_file} \
+singularity exec --cleanenv -H ${PWD} ${r_sif} Rscript ${r_processing_script} \
 --pgfile        ${folder}/report.pg_matrix.tsv \
 --out           ${folder} \
 --design        example/design_matrix.csv \

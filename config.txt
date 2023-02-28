@@ -2,6 +2,16 @@
 --out                   output/report.tsv
 --f                     example/raw/HREC_ETIS_1.mzML
 --f                     example/raw/HREC_ETIS_2.mzML
+--f                     example/raw/HREC_ETIS_3.mzML
+--f                     example/raw/HREC_ETIS_4.mzML
+--f                     example/raw/HREC_IRIS_1.mzML
+--f                     example/raw/HREC_IRIS_2.mzML
+--f                     example/raw/HREC_IRIS_3.mzML
+--f                     example/raw/HREC_IRIS_4.mzML
+--f                     example/raw/HREC_P_1.mzML
+--f                     example/raw/HREC_P_2.mzML
+--f                     example/raw/HREC_P_3.mzML
+--f                     example/raw/HREC_P_4.mzML
 --fasta                 example/uniprot-proteome_Human_UP000005640_20191105.fasta
 --lib                   dnd.speclib
 --threads               4

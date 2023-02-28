@@ -42,12 +42,4 @@ else
 fi
 
 r_processing_script='src/counts_processing.R'
-folder='output'
-singularity exec --cleanenv -H ${PWD} ${r_sif} Rscript ${r_processing_script} \
---pgfile        ${folder}/report.pg_matrix.tsv \
---out           ${folder} \
---design        example/design_matrix.csv \
---sds           3 \
---normalize     scale
-
-
+singularity exec --cleanenv -H ${PWD} ${r_sif} Rscript ${r_processing_script} $@

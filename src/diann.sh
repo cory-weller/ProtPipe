@@ -36,16 +36,4 @@ fi
 
 
 #### RUN DIA-NN ####################################################################################
-
-if grep -q -- '--skip' <<< $(echo $@); then
-    echo 'INFO: Skipping DIA-NN due to --skip'
-    # Remove --skip from $@
-    for arg do
-        shift
-        [ "$arg" = "--skip" ] && continue
-        set -- "$@" "$arg"
-    done
-else
-    python3 src/diann.py $@
-fi
-
+python3 src/diann.py $@

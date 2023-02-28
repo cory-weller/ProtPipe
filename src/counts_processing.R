@@ -2,24 +2,6 @@
 # R/4
 #proteomics analysis for DIA-NN and Spectronaut quantity estimates
 
-#### PACKAGES ######################################################################################
-package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'magick', 'ggdendro',
-                 'ggbeeswarm', 'ggrepel', 'optparse', 'ggthemes', 'foreach')
-cat("INFO: Loading required packages\n      ")
-cat(paste(package_list, collapse='\n      ')); cat('\n')
-
-defaultW <- getOption("warn"); options(warn = -1)   # Temporarily disable warnings for quiet loading
-if(all((lapply(package_list, require, character.only=TRUE)))) {
-    cat("INFO: All packages successfully loaded\n")
-} else {
-    cat("ERROR: One or more packages not available. Are you running this within the container?\n")
-}
-options(warn = defaultW)    # Turn warnings back on
-
-#### DEFAULTS ######################################################################################
-intensity_min_threshold <- 0
-
-
 #### ARG PARSING ###################################################################################
 library(optparse)
 pwd = getwd()
@@ -53,7 +35,7 @@ option_list = list(
     ),
     make_option(
         "--normalize",
-        default='median',
+        default='shift',
         type='character',
         help=paste(
             'shift: adjust sample intensities to match global median by adding a constant',
@@ -72,6 +54,13 @@ option_list = list(
             'Default: 3',
             sep=optparse_indent
         )
+    ),
+    make_option(
+        "--minintensity",
+        dest = 'minintensity',
+        default=0,
+        type='numeric',
+        help='Minimum LINEAR (not log) intensity. Default: 0'
     ),
     make_option(
         "--fdr",
@@ -137,11 +126,15 @@ option_list = list(
     )
 )
 
+
+
 usage_string <- "Rscript %prog --pgfile [filename] --design [filename] [other options] "
 opt <- parse_args(OptionParser(usage = usage_string, option_list))
-print(opt)
 
 
+
+
+# Set to TRUE when running interactively for debugging, to set test opts
 if(FALSE) {
     opt <- list(); 
     opt$pgfile <- 'output/report.pg_matrix.tsv'
@@ -154,6 +147,7 @@ if(FALSE) {
     opt$foldchange <- 5
 }
 
+badargs <- FALSE
 
 if(opt$dry) {
     cat("INFO: Quitting due to --dry run\n")
@@ -162,23 +156,46 @@ if(opt$dry) {
 
 if(! opt$normalize %in% c('shift','scale','none')) {
     cat("ERROR: --normalize must be 'shift' 'scale' or 'none'\n")
+    badargs <- TRUE
+}
+
+if (is.null(opt$pgfile)) {
+    cat("ERROR: --pgfile <file> must be provided\n")
+    badargs <- TRUE
+}
+
+if (is.null(opt$design)) {
+    cat("ERROR: --design <file> must be provided\n")
+    badargs <- TRUE
+}
+
+if (badargs == TRUE) {
     quit(status=1)
 }
 
-opt$lfc_threshold <- log(opt$foldchange, base=opt$log_base)
 
+#### PACKAGES ######################################################################################
+package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'magick', 'ggdendro',
+                 'ggbeeswarm', 'ggrepel', 'ggthemes', 'foreach')
+cat("INFO: Loading required packages\n      ")
+cat(paste(package_list, collapse='\n      ')); cat('\n')
+
+defaultW <- getOption("warn"); options(warn = -1)   # Temporarily disable warnings for quiet loading
+if(all((lapply(package_list, require, character.only=TRUE)))) {
+    cat("INFO: All packages successfully loaded\n")
+} else {
+    cat("ERROR: One or more packages not available. Are you running this within the container?\n")
+}
+options(warn = defaultW)    # Turn warnings back on
+
+
+
+opt$lfc_threshold <- log(opt$foldchange, base=opt$log_base)
 cat(paste0('INFO: LFC threshold of log[', opt$log_base, '](Intensity) > ', opt$lfc_threshold, '\n'))
 cat(paste0('INFO: FDR threshold of ', opt$fdr_threshold, '\n'))
 
 
 #### FUNCTIONS #####################################################################################
-# Within data.table `DT`, 
-# for `sdcols` specified columns, 
-# replaces all NA with `newvalue`
-replace_NAs <- function(DT, sdcols, newvalue) {
-  DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
-}
-
 tryTo <- function(infomsg='', cmd,  errormsg='ERROR: failed!') {
     # tryTo is a simple tryCatch wrapper, taking a command + message.
     # If the try block fails, an error is printed and R quits.
@@ -192,6 +209,16 @@ tryTo <- function(infomsg='', cmd,  errormsg='ERROR: failed!') {
     )
 }
 
+
+
+replace_NAs <- function(DT, sdcols, newvalue) {
+    # Within data.table `DT`, 
+    # for `sdcols` specified columns, 
+    # replaces all NA with `newvalue`
+    DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
+}
+
+
 ezwrite <- function(x, output_dir, output_filename) {
     # Wrapper for fwrite that uses standard TSV output defaults.
     # Concatenates output directory and filename for final output location.
@@ -204,7 +231,10 @@ ezwrite <- function(x, output_dir, output_filename) {
     
 }
 
+
 standardize_format <- function(DT.original) {
+    # Accepts an input protein group intensity data.table, whether spectronaut or DIA-NN format,
+    # and restructures into one consistent style for downstream processing
     DT <- copy(DT.original)
     if("Protein.Ids" %in% colnames(DT)) {
         DT[, 'Protein.Ids' := NULL]
@@ -232,7 +262,8 @@ standardize_format <- function(DT.original) {
 }
 
 
-melt_table <- function(DT) {
+melt_intensity_table <- function(DT) {
+    # Converts intensity data.table to long format
     info_cols <- c('Protein_Groups', 'Genes', 'First_Protein_Description')
     DT.long <- melt(DT, 
     measure.vars=colnames(DT[,-c(1:3)]),
@@ -241,9 +272,6 @@ melt_table <- function(DT) {
     return(DT.long)
 }
 
-filter_intensity <- function(DT, threshold) {
-    return(DT[Intensity > threshold])
-}
 
 plot_pg_counts <- function(DT, output_dir, output_filename) {
     n_samples <- nrow(DT)
@@ -257,6 +285,7 @@ plot_pg_counts <- function(DT, output_dir, output_filename) {
    
     ggsave(g,filename=paste0(output_dir, output_filename), width=20, height=2*n_samples, units='cm')
 }
+
 
 plot_pg_thresholds <- function(DT, output_dir, output_filename) {
     # G
@@ -275,7 +304,9 @@ plot_pg_thresholds <- function(DT, output_dir, output_filename) {
     )
 }
 
+
 plot_density <- function(DT.original, output_dir, output_filename) {
+    # Currently UNUSED as the beeswarm function serves the purpose well
     DT <- copy(DT.original)
     intensity_median <- median(DT[,Intensity])
     n_samples <- length(unique(DT[,Sample]))
@@ -317,6 +348,7 @@ plot_density <- function(DT.original, output_dir, output_filename) {
     )
 }
 
+
 shift_normalize_intensity <- function(DT.original) {
     DT <- copy(DT.original)
     # Get global median of intensity values
@@ -329,6 +361,7 @@ shift_normalize_intensity <- function(DT.original) {
     return(DT[])
 }
 
+
 scale_normalize_intensity <- function(DT.original) {
     DT <- copy(DT.original)
     # Get global median of intensity values
@@ -340,6 +373,7 @@ scale_normalize_intensity <- function(DT.original) {
     setnames(DT, 'NormInt', 'Intensity')
     return(DT[])
 }
+
 
 plot_flip_beeswarm <- function(DT, output_dir, output_filename, plot_title) {
     n_samples <- length(unique(DT$Sample))
@@ -381,6 +415,7 @@ plot_flip_beeswarm <- function(DT, output_dir, output_filename, plot_title) {
     invisible(file.remove('.beeswarm.tmp.png')) # invisible suppresses 'TRUE' being printed
 
 }
+
 
 plot_correlation_heatmap <- function(DT.corrs, output_dir, output_filename) {
     n_samples <- length(unique(DT.corrs[,SampleA]))
@@ -431,6 +466,7 @@ get_correlations <- function(DT.original) {
     return(dt.corrs[])
 }
 
+
 get_PCs <- function(DT) {
     out <- list()
     # Formatting prior to running PCA
@@ -453,6 +489,7 @@ get_PCs <- function(DT) {
     return(out)
 }
 
+
 plot_PCs <- function(PCA, output_dir, output_filename) {
     # Get % explained from PCA$summary table for PC1 and PC2
     pc1_label <- as.character(format(100*PCA$summary[component=='PC1', 'percent'], digits=3))
@@ -471,6 +508,7 @@ plot_PCs <- function(PCA, output_dir, output_filename) {
     cat(paste0('   -> ', output_dir, output_filename, '\n'))
     ggsave(g,filename=paste0(output_dir, output_filename), width=18, height=18, units='cm')
 }
+
 
 plot_hierarchical_cluster <- function(DT, output_dir, output_filename) {
     dist_mat <- dist(t(DT[,-c(1:3)]))
@@ -493,6 +531,7 @@ get_umap <- function(DT.original, neighbors) {
     return(DT.out[])
 }
 
+
 plot_umap <- function(DT, output_dir, output_filename) {
     g <- ggplot(DT, aes(x=UMAP1, y=UMAP2, color=condition)) +
     geom_point() +
@@ -500,6 +539,7 @@ plot_umap <- function(DT, output_dir, output_filename) {
     cat(paste0('   -> ', output_dir, output_filename, '\n'))
     ggsave(g, filename=paste0(output_dir, output_filename), height=15, width=20, units='cm')
 }
+
 
 run_contrast <- function(DT.all, treatment_sample_names, treatment, control)  {
     control_sample_names <- colnames(DT.all)[colnames(DT.all) %like% control]
@@ -538,6 +578,7 @@ run_contrast <- function(DT.all, treatment_sample_names, treatment, control)  {
     return(DT.out[])
 }
 
+
 plot_volcano <- function(DT.original, treatment, control, log_base, lfc_threshold, fdr_threshold, out_dir) {
     DT <- copy(DT.original)
     DT[, log_foldchange := log(ratio, base=log_base)]
@@ -562,39 +603,46 @@ plot_volcano <- function(DT.original, treatment, control, log_base, lfc_threshol
 
 
 #### MAKE DIRS #####################################################################################
+
 QC_dir <- paste0(opt$outdir, '/QC/')
 if(! dir.exists(QC_dir)){
     dir.create(QC_dir, recursive = T)
 }
+
 
 cluster_dir <- paste0(opt$outdir, '/clustering/')
 if(! dir.exists(cluster_dir)){
     dir.create(cluster_dir, recursive = T)
 }
 
+
 DI_dir <- paste0(opt$outdir, '/differential_intensity/')
 if(! dir.exists(DI_dir)){
     dir.create(DI_dir, recursive = T)
 }
 
-#### IMPORT DATA ###################################################################################
 
+#### IMPORT AND FORMAT DATA#########################################################################
 
 tryTo(paste0('INFO: Reading input file ', opt$pgfile),{
     dat <- fread(opt$pgfile)
 }, paste0('ERROR: problem trying to load ', opt$pgfile, ', does it exist?'))
 
+
 tryTo(paste0('INFO: Massaging data from ', opt$pgfile, ' into a common style format for processing'), {
     dat <- standardize_format(dat)
 }, 'ERROR: failed! Check for missing/corrupt headers?')
 
+
 tryTo(paste0('INFO: Converting to long format'), {
-    dat.long <- melt_table(dat)
+    dat.long <- melt_intensity_table(dat)
 }, 'ERROR: failed! Check for missing/corrupt headers?')
+
 
 tryTo(paste0('INFO: Applying Log[base', opt$log_base, '](value+1) transformation to intensities'),{
     dat.long <- dat.long[, Intensity := log((Intensity + 1), base=opt$log_base)]
 },'ERROR: failed! Was your log base numeric and > 1?')
+
 
 tryTo('INFO: Excluding all unquantified or zero intensities', {
     dat.long <- dat.long[! is.na(Intensity)][Intensity != 0]
@@ -605,13 +653,17 @@ tryTo('INFO: Excluding all unquantified or zero intensities', {
 #### QC ############################################################################################
 
 ## Filtering
-increasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][order(median), Sample]
-# decreasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][order(-median), Sample]
-dat.long[, Sample := factor(Sample, levels=increasing_levels)]
 
-tryTo(paste0('INFO: Applying Filter Log[', opt$log_base, '](Intensity) > ',intensity_min_threshold),{
-    dat.long <- filter_intensity(dat.long, intensity_min_threshold)
+tryTo(paste0('INFO: Sorting samples by median intensity'),{
+    increasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][order(median), Sample]
+    dat.long[, Sample := factor(Sample, levels=increasing_levels)]
 }, 'ERROR: failed!')
+
+
+tryTo(paste0('INFO: Applying Filter Log[', opt$log_base, '](Intensity) > ',opt$minintensity),{
+    dat.long <- dat.long[Intensity > opt$minintensity]
+}, 'ERROR: failed!')
+
 
 tryTo('INFO: Plotting intensity distribution',{
     plot_flip_beeswarm(dat.long, QC_dir, 'intensities.png', plot_title='Un-normalized intensities')
@@ -652,6 +704,7 @@ if (opt$normalize == 'none') {
     }, 'ERROR: failed!')
 }
 
+
 # pgcounts represents the distribution of Protein Groups with Intensity > 0
 # Visually, it is represented as a bar plot with x=sample, y=N, ordered by descending N
 # Get counts of [N=unique gene groups with `Intensity` > 0]
@@ -677,14 +730,11 @@ tryTo('INFO: Calculating protein group counts by minimum intensity thresholds',{
 }, 'ERROR: failed!')
 
 
-
-
 tryTo('INFO: Plotting sample intensity correlations',{
     dat.correlations <- get_correlations(dat)
     ezwrite(dat.correlations, QC_dir, 'sample_correlation.tsv')
     plot_correlation_heatmap(dat.correlations, QC_dir, 'sample_correlation.png')
 }, 'ERROR: failed!')
-
 
 
 tryTo('INFO: Importing and validating experimental design\n',{
@@ -748,8 +798,7 @@ tryTo('INFO: Replacing NA values with 0',{
 
 
 #### CLUSTERING ####################################################################################
-
-
+# PCA
 tryTo('INFO: running PCA and plotting first two components',{
     pca <- get_PCs(dat)
     ezwrite(pca$components, cluster_dir, 'PCA.tsv')
@@ -758,12 +807,13 @@ tryTo('INFO: running PCA and plotting first two components',{
 }, 'ERROR: failed!')
 
 
+# Hierarchical Clustering
 tryTo('INFO: running Hierarchical Clustering',{
     plot_hierarchical_cluster(dat, cluster_dir, 'hierarchical_cluster.png')
 }, 'ERROR: failed!')
 
 
-
+# UMAP
 tryTo('INFO: running UMAP',{
     umap <- get_umap(dat, opt$neighbors)
     ezwrite(umap, cluster_dir, 'UMAP.tsv')
@@ -773,10 +823,6 @@ tryTo('INFO: running UMAP',{
 
 
 #### DIFFERENTIAL INTENSITY ########################################################################
-
-
-
-
 tryTo('INFO: Running differential intensity contrasts',{
     for (treatment in conditions) {
         treatment_sample_names <- design[condition == treatment, sample_name]
@@ -791,6 +837,36 @@ tryTo('INFO: Running differential intensity contrasts',{
 
 quit()
 
+## TODO:
+# Evaluate normalization with samples from very different batches?
+# Calculate differential intensities using DESeq2?
+# Function to compare q-values from spectronaut VS DIA-NN?
+
+
+
+
+
+
+
+
+
+
+
+
+
+# options(ggrepel.max.overlaps=Inf)
+# vol_plot=result_ttest
+# vol_plot$Group <- "Others"
+# vol_plot$Group[which(vol_plot$log2FC >= opt$lfc_threshold)] <-"UP"
+# vol_plot$Group[which(vol_plot$log2FC <= -opt$lfc_threshold)] <-"DOWN"
+# vol_plot$Group[which(vol_plot$adj.Pvalue >= fdr_cutoff)]<- "Others"
+# up_gene_5 <- vol_plot[which(vol_plot$Group=="UP"),]
+# up_gene_5 <- up_gene_5[order(up_gene_5$log2FC,decreasing = T)[1:5],]
+# down_gene_5 <- vol_plot[which(vol_plot$Group=="DOWN"),]
+# down_gene_5 <- down_gene_5[order(down_gene_5$log2FC,decreasing = F)[1:5],]
+# top5_gene <- rbind(up_gene_5,down_gene_5)
+# top5_gene <- top5_gene[!duplicated(top5_gene$Genes),]
+# }
 
 
 
@@ -805,53 +881,23 @@ quit()
 
 
 
-options(ggrepel.max.overlaps=Inf)
-vol_plot=result_ttest
-vol_plot$Group <- "Others"
-vol_plot$Group[which(vol_plot$log2FC >= opt$lfc_threshold)] <-"UP"
-vol_plot$Group[which(vol_plot$log2FC <= -opt$lfc_threshold)] <-"DOWN"
-vol_plot$Group[which(vol_plot$adj.Pvalue >= fdr_cutoff)]<- "Others"
-up_gene_5 <- vol_plot[which(vol_plot$Group=="UP"),]
-up_gene_5 <- up_gene_5[order(up_gene_5$log2FC,decreasing = T)[1:5],]
-down_gene_5 <- vol_plot[which(vol_plot$Group=="DOWN"),]
-down_gene_5 <- down_gene_5[order(down_gene_5$log2FC,decreasing = F)[1:5],]
-top5_gene <- rbind(up_gene_5,down_gene_5)
-top5_gene <- top5_gene[!duplicated(top5_gene$Genes),]
-}
 
 
 
+# p=ggplot(vol_plot, aes(x = log2FC, y = -log10(adj.Pvalue))) +
+#     geom_point(aes(color = Group)) +
+#     scale_color_manual(values = c("blue", "grey","red"))  +
+#     theme_bw(base_size = 12) + theme(legend.position = "bottom") +
+#     geom_label_repel(
+#     data = subset(top5_gene),
+#     aes(label = Genes),
+#     size = 5,
+#     box.padding = unit(0.35, "lines"),
+#     point.padding = unit(0.3, "lines"))+
+#     geom_hline(yintercept=-log10(fdr_cutoff), linetype="dashed")+ 
+#     #geom_vline(xintercept=lfc_cutoff, linetype="dashed")+ 
+#     #geom_vline(xintercept=-lfc_cutoff, linetype="dashed")+
+#     theme_classic()
 
-
-
-
-
-## Evaluate normalization with samples from very different batches?
-## Calculate differential intensities using DESeq2?
-## Function to compare q-values from spectronaut VS DIA-NN?
-
-
-
-
-
-
-
-
-
-p=ggplot(vol_plot, aes(x = log2FC, y = -log10(adj.Pvalue))) +
-    geom_point(aes(color = Group)) +
-    scale_color_manual(values = c("blue", "grey","red"))  +
-    theme_bw(base_size = 12) + theme(legend.position = "bottom") +
-    geom_label_repel(
-    data = subset(top5_gene),
-    aes(label = Genes),
-    size = 5,
-    box.padding = unit(0.35, "lines"),
-    point.padding = unit(0.3, "lines"))+
-    geom_hline(yintercept=-log10(fdr_cutoff), linetype="dashed")+ 
-    #geom_vline(xintercept=lfc_cutoff, linetype="dashed")+ 
-    #geom_vline(xintercept=-lfc_cutoff, linetype="dashed")+
-    theme_classic()
-
-    ggsave(file = paste0(out_dir,i,"_",unique(design$control[which(design$condition==i)]),"_top10_fdr0.05_fc1.5_vocal.pdf"),plot = p,width = 8,height = 8)
+#     ggsave(file = paste0(out_dir,i,"_",unique(design$control[which(design$condition==i)]),"_top10_fdr0.05_fc1.5_vocal.pdf"),plot = p,width = 8,height = 8)
 

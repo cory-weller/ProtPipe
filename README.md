@@ -10,7 +10,7 @@ We include a convenient wrapper script for running DIA-NN inside a pre-built sin
 # Quick-start
 
 1. Ensure `singularity` is installed and accessible on your system. Many HPCs (including NIH Biowulf) come with this pre-installed as a module. If your HPC has singularity installed, it will be automatically detected and loaded when necessary.
-2. Clone this repository, i.e. `git clone https://github.com/cory-weller/ProtPipe.git`
+2. Clone this repository, i.e. execute `git clone https://github.com/cory-weller/ProtPipe.git`
 3. If you are predicting protein abundances from raw mass spec output, look over and edit any custom `DIA-NN` parameters inside [`config.txt`](config.txt). You can either edit `config.txt` directly (and it will be used by default), or make a copy and save it to a different file name, then reference it with `--cfg newfilename.txt` when running the wrapper script.
 4. Use the wrapper [`ProtPipe.sh`](src/ProtPipe.sh), either submitting to SLURM or running it directly.
 5. R processing TBI
@@ -24,75 +24,20 @@ This workflow requires that [`Singularity`](https://sylabs.io/singularity) be av
 To run on your personal/local non-Linux machine, Mac users need to first install a number of dependencies. Windows users would either need to use a virtual machine, or run things through the Windows Subsystem for Linux (WSL). Explaining the installation of `singularity` on these non-Linux systems is beyond the scope of this guide, so we defer to [the documentation here](https://docs.sylabs.io/guides/3.0/user-guide/installation.html).
 
 # Predicting Protein Abundances (running DIA-NN)
-After editing the contents of `config.txt`, or generating a new file to specify with `--cfg newfile.txt`:
+After editing the contents of [`config.txt`](config.txt), or generating a new file to specify with `--cfg newfile.txt`:
 ```bash
 # Submit to SLURM
-sbatch ./ProtPipe.sh --cfg config.txt
+sbatch src/diann.sh --cfg config.txt
 
 # Run Locally
-./ProtPipe.sh
+src/diann.sh --cfg config.txt
 ```
 
-<details><summary>Re-running on generated spectral library</summary>
+# Processing protein intensity estimates
 
-For regenerating final outputs without the long computational steps. Requires the .speclib files.
-
+```bash
+src/analyze.sh --pgfile output/report.pg_matrix.tsv --design example/design_matrix.csv
 ```
-singularity exec \
---cleanenv -H /home/wellerca/ProtPipe ./src/diann-1.8.1.sif diann \
---fasta example/uniprot-proteome_Human_UP000005640_20191105.fasta \
---reannotate \
---f example/raw_MS_mzML/HREC_ETIS_2.mzML \
---threads 4 \
---out-lib test \
---qvalue 0.01 \
---min-fr-mz 200 \
---max-fr-mz 2000  \
---cut K*,R* \
---missed-cleavages 2 \
---min-pep-len 7 \
---max-pep-len 52 \
---min-pr-mz 300 \
---max-pr-mz 1800 \
---min-pr-charge 1 \
---max-pr-charge 4 \
---var-mods 5 \
---monitor-mod UniMod:1 \
---var-mod UniMod:35,15.994915,M \
---var-mod UniMod:1,42.010565,*n \
---smart-profiling \
---peak-center \
---no-ifs-removal \
---met-excision  \
---matrices \
---lib test.speclib \
---out test
-```
-
-</details>
-
-# Subsetting mzML file for testing purposes
-from [here](https://rformassspectrometry.github.io/Spectra/articles/Spectra.html#exporting-spectra):
-```R
-# In R/4.2
-BiocInstaller::install('mzR')
-BiocInstaller::install('Spectra')
-
-library(Spectra)
-
-# load mzML using `Spectra`
-sp <- Spectra('HREC_ETIS_1.mzML')
-
-# write first 800 records using `export` and `MsBackendMzR()`
-export(sp[1:8000], MsBackendMzR(), file='test.mzML')
-```
-
-# Processing DIA Estimates
-
-# To Do
-* update R in singularity image? (as `Spectra` package requires R/4.2)
-
-
 
 
 <details><summary>extra to be changed</summary>

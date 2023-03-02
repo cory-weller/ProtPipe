@@ -5,3 +5,6 @@
 *.mzML.quant
 slurm*.out
 output/*
+src/pwiz_sandbox
+20230110_Nate
+HREC_HSAEC

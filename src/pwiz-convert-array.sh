@@ -4,11 +4,13 @@
 #SBATCH --time 0:59:00
 #SBATCH --ntasks 2
 #SBATCH --partition quick,norm
-
-RAWFILE=${1}
+N=${SLURM_ARRAY_TASK_ID}
+filelist=${1}
+RAWFILE=$(head -n ${N} ${filelist} | tail -n 1)
 DATADIR="$(dirname ${RAWFILE})/"
 RAWFILE_BASENAME=$(basename $RAWFILE)
 PWIZ='src/pwiz_sandbox'
+
 
 trap '[[ $? -eq 1 ]] && echo Halting execution due to errors' EXIT
 

@@ -38,3 +38,54 @@ src/diann.sh --cfg config.txt
 src/analyze.sh --pgfile output/report.pg_matrix.tsv --design example/design_matrix.csv
 ```
 
+## Converting Mass Spec file formats
+
+DIA-NN cannot handle some propietary file formats such as thermo fisher RAW. Thus these files must
+be converted (i.e. to mzML) prior to running DIA-NN. Conversion can be done interactively or by
+submitting to your HPC with `sbatch`.
+
+Converting a single file:
+```bash
+src/pwiz-convert /path/to/your/MassSpecFile.raw
+```
+
+
+
+<details><summary>Additional Details</summary>
+
+Mass spec file conversion is handled by ProteoWizard (via wine in a singularity container).
+A writable sandboxed version of the container (which is required to run ProteoWizard) was built
+and modified from a [docker image](docker://chambm/pwiz-skyline-i-agree-to-the-vendor-licenses) on
+March 02 2023. Steps were modified from [here](https://github.com/jspaezp/elfragmentador-data#setting-up-msconvert-on-singularity-).
+
+```bash
+# Build writable singularity sandbox image based on docker image
+singularity build --sandbox pwiz_sandbox docker://chambm/pwiz-skyline-i-agree-to-the-vendor-licenses
+
+# Modified pwiz_sandbox/usr/bin/mywine
+echo """#!/bin/sh
+
+GLOBALWINEPREFIX=/wineprefix64
+MYWINEPREFIX=/mywineprefix/
+
+if [ ! -L "$MYWINEPREFIX"/dosdevices/z: ] ; then 
+  mkdir -p "$MYWINEPREFIX"/dosdevices
+  cp "$GLOBALWINEPREFIX"/*.reg "$MYWINEPREFIX"
+  ln -sf "$GLOBALWINEPREFIX/drive_c" "$MYWINEPREFIX/dosdevices/c:"
+  ln -sf "/" "$MYWINEPREFIX/dosdevices/z:"
+  echo disable > $MYWINEPREFIX/.update-timestamp        # Line being added
+  echo disable > $GLOBALWINEPREFIX/.update-timestamp    # Line being added
+fi 
+
+export WINEPREFIX=$MYWINEPREFIX
+wine "$@"
+""" > pwiz_sandbox/usr/bin/mywine
+
+tar -czvf pwiz_sandbox.tar.gz pwiz_sandbox
+rclone copy pwiz_sandbox.tar.gz onedrive:/singularity       # upload archive to cloud
+```
+
+
+</details>
+
+## New Section

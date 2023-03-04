@@ -35,7 +35,8 @@ src/diann.sh --cfg config.txt
 # Processing protein intensity estimates
 
 ```bash
-src/analyze.sh --pgfile output/report.pg_matrix.tsv --design example/design_matrix.csv
+src/analyze.sh --pgfile TEST/report.pg_matrix.tsv --design TEST/design.tsv --out TEST/
+
 ```
 
 ## Converting Mass Spec file formats
@@ -88,4 +89,14 @@ rclone copy pwiz_sandbox.tar.gz onedrive:/singularity       # upload archive to 
 
 </details>
 
+# Bulk convert raw to mzml
+```bash
+filelist='rawfiles.txt'
+cat <(find 20230110_Nate/*.raw) <(find HREC_HSAEC/*.raw) > ${filelist}
+nfiles=$(wc -l ${filelist} | awk '{print $1}')
+sbatch --array=1-${nfiles} src/pwiz-convert-array.sh ${filelist}
+```
+
 ## New Section
+sbatch src/diann.sh --cfg nate-config.txt
+sbatch src/diann.sh --cfg HREC-config.txt

@@ -47,11 +47,12 @@ option_list = list(
     make_option(
         "--sds",
         dest = 'sds',
-        default=3,
+        default=1,
         type='numeric',
         help=paste(
             'Filter out samples with protein group counts > N standard deviations from the mean.',
-            'Default: 3',
+            'Increase to higher values for greater tolerance of variance in protein group counts.',
+            'Default: 1',
             sep=optparse_indent
         )
     ),
@@ -137,14 +138,17 @@ opt <- parse_args(OptionParser(usage = usage_string, option_list))
 # Set to TRUE when running interactively for debugging, to set test opts
 if(FALSE) {
     opt <- list(); 
-    opt$pgfile <- 'output/report.pg_matrix.tsv'
-    opt$outdir <- 'output'
-    opt$design <- 'example/design_matrix.csv'
-    opt$log_base <- 2
+    opt$pgfile <- 'TEST/report.pg_matrix.tsv'
+    opt$outdir <- 'TEST'
+    opt$design <- 'TEST/design.tsv'
+    opt$log_base <- 10
     opt$dry <- FALSE
     opt$normalize <- 'shift'
     opt$fdr_threshold <- 0.05
     opt$foldchange <- 5
+    opt$minintensity <- 0
+    opt$neighbors <- 6
+    opt$sds <- 1
 }
 
 badargs <- FALSE
@@ -175,7 +179,7 @@ if (badargs == TRUE) {
 
 
 #### PACKAGES ######################################################################################
-package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'magick', 'ggdendro',
+package_list = c('ggplot2', 'data.table', 'corrplot', 'umap', 'magick', 'ggdendro', 'ecodist',
                  'ggbeeswarm', 'ggrepel', 'ggthemes', 'foreach')
 cat("INFO: Loading required packages\n      ")
 cat(paste(package_list, collapse='\n      ')); cat('\n')
@@ -442,7 +446,7 @@ plot_correlation_heatmap <- function(DT.corrs, output_dir, output_filename) {
 }
 
 
-get_correlations <- function(DT.original) {
+get_spearman <- function(DT.original) {
     DT <- copy(DT.original)
     #### Pairwise correlations between sample columns
     dt.samples <- DT[,-c(1:3)]     # Ignore info columns (subset to only intensity values)
@@ -452,9 +456,30 @@ get_correlations <- function(DT.original) {
     # (no need for full correlation matrix with diagonal or repeated comparisons)
     dt.corrs[lower.tri(dt.corrs, diag=T)] <- NA
     dt.corrs <- as.data.table(dt.corrs, keep.rownames=T)
+    lvls <- dt.corrs[,rn]
     dt.corrs <- melt(dt.corrs, measure.vars=dt.corrs[,rn], value.name='Spearman')
     dt.corrs <- dt.corrs[! is.na(Spearman)]
     setnames(dt.corrs, c('rn', 'variable'), c('SampleA','SampleB'))
+
+    # Format correlations as 3 digits
+    dt.corrs[, Spearman := as.numeric(format(Spearman, digits=3))]
+
+    # Adjust levels such that both axes plot samples in the same order
+    dt.corrs[, SampleA := factor(SampleA, levels=lvls)]
+    dt.corrs[, SampleB := factor(SampleB, levels=lvls)]
+    return(dt.corrs[])
+}
+
+get_pearson_matrix <- function(DT.original) {
+    DT <- copy(DT.original)
+    #### Pairwise correlations between sample columns
+    dt.samples <- DT[,-c(1:3)]     # Ignore info columns (subset to only intensity values)
+    dt.corrs <- cor(as.matrix(na.omit(dt.samples)), method='pearson')  
+
+    dt.corrs <- as.data.table(dt.corrs, keep.rownames=T)
+    #dt.corrs <- melt(dt.corrs, measure.vars=dt.corrs[,rn], value.name='Spearman')
+    #dt.corrs <- dt.corrs[! is.na(Spearman)]
+    #setnames(dt.corrs, c('rn', 'variable'), c('SampleA','SampleB'))
 
     # Format correlations as 3 digits
     dt.corrs[, Spearman := as.numeric(format(Spearman, digits=3))]
@@ -467,11 +492,15 @@ get_correlations <- function(DT.original) {
 }
 
 
-get_PCs <- function(DT) {
+get_PCs <- function(DT.intensity, DT.design) {
     out <- list()
     # Formatting prior to running PCA
-    cluster.dat <- DT[,-c(1:3)]   # Subset to only sample intensity columns
-    replace_NAs(cluster.dat, colnames(cluster.dat), 0)    # Replace NA values with 0
+    cluster.dat <- copy(DT.intensity[,-c(1:3)]) 
+    samplenames <- colnames(cluster.dat)
+    replace_NAs(cluster.dat, samplenames, 0)    # Replace NA values with 0
+    cluster.dat[, 'N_notzero' := apply(.SD, 1, function(x) sum(x!=0)), .SDcols=samplenames]
+    cluster.dat <- cluster.dat[N_notzero!=0][,-c(1:3)]
+
     cluster.dat <- t(cluster.dat)                       # Transpose before PCA
     pca <- prcomp(cluster.dat, center = TRUE, scale. = TRUE)
 
@@ -485,7 +514,7 @@ get_PCs <- function(DT) {
     setnames(pca, 'rn', 'Sample')
 
     # Merge in design matrix to add 'condition' column
-    out$components <- merge(pca, design, by.x= 'Sample', by.y='sample_name')
+    out$components <- merge(pca, DT.design, by.x= 'Sample', by.y='sample_name')
     return(out)
 }
 
@@ -540,6 +569,23 @@ plot_umap <- function(DT, output_dir, output_filename) {
     ggsave(g, filename=paste0(output_dir, output_filename), height=15, width=20, units='cm')
 }
 
+# filter_pgs <- function(DT.all, treatment_sample_names, treatment, control)  {
+#     control_sample_names <- colnames(DT.all)[colnames(DT.all) %like% control]
+#     n_treatment <- length(treatment_sample_names)
+#     n_controls <- length(control_sample_names)
+
+#     info_cols <- colnames(DT.all)[1:3]
+#     DT <- DT.all[, c(info_cols, treatment_sample_names, control_sample_names), with=F]
+
+#     # Filter: protein groups with at least half of control and treatment samples having non-zero value
+#     DT[, 'N_missing_treatment' := apply(.SD, 1, function(x) sum(x==0)), .SDcols=c(treatment_sample_names)]
+#     DT[, 'N_missing_control' := apply(.SD, 1, function(x) sum(x==0)), .SDcols=c(control_sample_names)]
+#     DT <- DT[N_missing_treatment < (n_treatment/2)]
+#     DT <- DT[N_missing_control < (n_controls/2)]
+#     DT[, 'N_missing_treatment' := NULL]
+#     DT[, 'N_missing_control' := NULL]
+#     return(DT[])
+# }
 
 run_contrast <- function(DT.all, treatment_sample_names, treatment, control)  {
     control_sample_names <- colnames(DT.all)[colnames(DT.all) %like% control]
@@ -583,13 +629,13 @@ plot_volcano <- function(DT.original, treatment, control, log_base, lfc_threshol
     DT <- copy(DT.original)
     DT[, log_foldchange := log(ratio, base=log_base)]
     log_lfc_threshold <- log(lfc_threshold, base=log_base)
+    log_fdr_threshold <- -1*log(fdr_threshold, base=log_base)
     DT[, labeltext := '']
     g <- ggplot(DT, aes(x=log_foldchange, y=-1*log10(q))) +
         geom_point() +
         theme_few() +
         geom_label_repel(aes(label=labeltext)) +
-        scale_y_log10() +
-        geom_hline(yintercept=fdr_threshold, linetype='dashed', alpha=0.5) +
+        geom_hline(yintercept=log_fdr_threshold, linetype='dashed', alpha=0.5) +
         geom_vline(xintercept=log_lfc_threshold, linetype='dashed', alpha=0.5) +
         geom_vline(xintercept=(-1*log_lfc_threshold), linetype='dashed', alpha=0.5) +
         labs(x=paste0('Log[', opt$log_base, '](Intensity) fold change'),
@@ -655,7 +701,7 @@ tryTo('INFO: Excluding all unquantified or zero intensities', {
 ## Filtering
 
 tryTo(paste0('INFO: Sorting samples by median intensity'),{
-    increasing_levels <- dat.long[, list('median'=median(Intensity)), by=Sample][order(median), Sample]
+    increasing_levels <- as.character(dat.long[, list('median'=median(Intensity)), by=Sample][order(median)]$Sample)
     dat.long[, Sample := factor(Sample, levels=increasing_levels)]
 }, 'ERROR: failed!')
 
@@ -705,6 +751,14 @@ if (opt$normalize == 'none') {
 }
 
 
+tryTo('INFO: Replacing NA values with 0',{
+    replace_NAs(dat, colnames(dat[,-c(1:3)]), 0)
+    dat.long[is.na(Intensity), Intensity := 0]
+}, 'ERROR: failed!')
+
+
+
+
 # pgcounts represents the distribution of Protein Groups with Intensity > 0
 # Visually, it is represented as a bar plot with x=sample, y=N, ordered by descending N
 # Get counts of [N=unique gene groups with `Intensity` > 0]
@@ -731,14 +785,15 @@ tryTo('INFO: Calculating protein group counts by minimum intensity thresholds',{
 
 
 tryTo('INFO: Plotting sample intensity correlations',{
-    dat.correlations <- get_correlations(dat)
+    dat.correlations <- get_spearman(dat)
     ezwrite(dat.correlations, QC_dir, 'sample_correlation.tsv')
     plot_correlation_heatmap(dat.correlations, QC_dir, 'sample_correlation.png')
 }, 'ERROR: failed!')
 
 
 tryTo('INFO: Importing and validating experimental design\n',{
-    design <- fread(opt$design)
+    design <- fread(opt$design, header=TRUE)
+    setnames(design, c('sample_name', 'condition', 'control'))
     print(design[])
     cat('\n')
     conditions <- unique(design$condition)
@@ -790,17 +845,13 @@ tryTo('INFO: Identifying samples with protein group count outliers',{
 }, 'ERROR: failed!')
 
 
-tryTo('INFO: Replacing NA values with 0',{
-    replace_NAs(dat, colnames(dat[,-c(1:3)]), 0)
-    dat.long[is.na(Intensity), Intensity := 0]
-}, 'ERROR: failed!')
-
-
 
 #### CLUSTERING ####################################################################################
+
+
 # PCA
 tryTo('INFO: running PCA and plotting first two components',{
-    pca <- get_PCs(dat)
+    pca <- get_PCs(dat, design)
     ezwrite(pca$components, cluster_dir, 'PCA.tsv')
     ezwrite(pca$summary, cluster_dir, 'PCA_summary.tsv')
     plot_PCs(pca, cluster_dir, 'PCA.png')
@@ -825,8 +876,8 @@ tryTo('INFO: running UMAP',{
 #### DIFFERENTIAL INTENSITY ########################################################################
 tryTo('INFO: Running differential intensity contrasts',{
     for (treatment in conditions) {
-        treatment_sample_names <- design[condition == treatment, sample_name]
-        control <- unique(design[condition == condition.i, control])
+        treatment_sample_names <- intersect(colnames(dat), design[condition == treatment, sample_name])
+        control <- unique(design[condition == treatment, control])
         control_sample_names <- colnames(dat)[colnames(dat) %like% control]
         
         contrast <- run_contrast(dat, treatment_sample_names, treatment, control)

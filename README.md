@@ -39,6 +39,94 @@ src/analyze.sh --pgfile TEST/report.pg_matrix.tsv --design TEST/design.tsv --out
 
 ```
 
+# WITH EMV samples, EMV as control
+src/analyze.sh \
+    --pgfile ANXA11/DIANN_PGs_with_EMV.tsv \
+    --design ANXA11/EMV_as_control.tsv \
+    --out ANXA11/with_EMV_vs_EMV \
+    --sds 4 \
+    --normalize shift \
+    --base 2 \
+    --labelgene ANXA11
+
+
+# WITH EMV samples, WT as control
+src/analyze.sh \
+    --pgfile ANXA11/DIANN_PGs_with_EMV.tsv \
+    --design ANXA11/WT_as_control.tsv \
+    --out ANXA11/with_EMV_vs_WT \
+    --sds 4 \
+    --normalize shift \
+    --base 2 \
+    --labelgene ANXA11
+
+
+# WITHOUT EMV samples, WT as control
+src/analyze.sh \
+    --pgfile ANXA11/DIANN_PGs_no_EMV.tsv \
+    --design ANXA11/WT_as_control.tsv \
+    --out ANXA11/no_EMV_vs_WT \
+    --sds 4 \
+    --normalize shift \
+    --base 2 \
+    --labelgene ANXA11
+
+# Original Spectronaut, WT as control
+src/analyze.sh \
+    --pgfile ANXA11/spectronaut/ANXA11_Protein_Intensity.csv \
+    --design ANXA11/WT_as_control.tsv \
+    --out ANXA11/spectronaut \
+    --sds 4 \
+    --normalize shift \
+    --base 2 \
+    --labelgene ANXA11
+
+# Neurons, A70 as control
+src/analyze.sh \
+    --pgfile ANXA11/neurons/neurons.tsv \
+    --design ANXA11/designs/neuron_vs_A70.tsv \
+    --out ANXA11/neurons \
+    --sds 4 \
+    --normalize shift \
+    --base 2 \
+    --labelgene ANXA11
+
+# Microglia, A70 as control
+src/analyze.sh \
+    --pgfile ANXA11/microglia/microglia.tsv \
+    --design ANXA11/designs/microglia_vs_A70.tsv \
+    --out ANXA11/microglia \
+    --sds 4 \
+    --normalize shift \
+    --base 2 \
+    --labelgene ANXA11
+
+
+# Neurons, 140 as control
+src/analyze.sh \
+    --pgfile ANXA11/neurons/neurons.tsv \
+    --design ANXA11/designs/neuron_vs_140.tsv \
+    --out ANXA11/neurons \
+    --sds 4 \
+    --normalize shift \
+    --base 2 \
+    --labelgene ANXA11
+
+# Microglia, 140 as control
+src/analyze.sh \
+    --pgfile ANXA11/microglia/microglia.tsv \
+    --design ANXA11/designs/microglia_vs_140.tsv \
+    --out ANXA11/microglia \
+    --sds 4 \
+    --normalize shift \
+    --base 2 \
+    --labelgene ANXA11
+
+
+spectronaut_DIA='ANXA11_spectronaut/ANXA11_Protein_Intensity.csv'
+DIANN_with_EMV='ANXA11_DIANN/report.pg_matrix.tsv'
+DIANN_no_EMV='ANXA11_DIANN_no_EMV/report.pg_matrix.tsv'
+
 ## Converting Mass Spec file formats
 
 DIA-NN cannot handle some propietary file formats such as thermo fisher RAW. Thus these files must
@@ -92,7 +180,7 @@ rclone copy pwiz_sandbox.tar.gz onedrive:/singularity       # upload archive to 
 # Bulk convert raw to mzml
 ```bash
 filelist='rawfiles.txt'
-cat <(find 20230110_Nate/*.raw) <(find HREC_HSAEC/*.raw) > ${filelist}
+cat <(find ANXA11_redux | grep raw) > ${filelist}
 nfiles=$(wc -l ${filelist} | awk '{print $1}')
 sbatch --array=1-${nfiles} src/pwiz-convert-array.sh ${filelist}
 ```

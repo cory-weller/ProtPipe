@@ -28,6 +28,12 @@ option_list = list(
         )
     ),
     make_option(
+        "--labelgene",
+        dest="labelgene",
+        default=NULL, 
+        help='Gene to always label in output plots'
+    ),
+    make_option(
         "--base",
         dest="log_base",
         default=10, 
@@ -45,6 +51,14 @@ option_list = list(
         )
     ),
     make_option(
+        "--exclude",
+        default=NULL,
+        type='character',
+        help=paste(
+            'semicolon-separated string of files to exclude from analysis'
+        )
+    ),
+    make_option(
         "--sds",
         dest = 'sds',
         default=1,
@@ -52,7 +66,7 @@ option_list = list(
         help=paste(
             'Filter out samples with protein group counts > N standard deviations from the mean.',
             'Increase to higher values for greater tolerance of variance in protein group counts.',
-            'Default: 1',
+            'Default: 3',
             sep=optparse_indent
         )
     ),
@@ -76,7 +90,7 @@ option_list = list(
     ),
     make_option(
         "--foldchange",
-        dest = 'foldchange_min',
+        dest = 'foldchange',
         default=5,
         type='numeric',
         help=paste(
@@ -108,10 +122,10 @@ option_list = list(
     ),
     make_option(
         "--neighbors",
-        default=10,
+        default=15,
         type='numeric',
         help=paste(
-            'N Neighbors to use for UMAP. Default: 10',
+            'N Neighbors to use for UMAP. Default: 15',
             sep=optparse_indent
         )
     ),
@@ -133,22 +147,24 @@ usage_string <- "Rscript %prog --pgfile [filename] --design [filename] [other op
 opt <- parse_args(OptionParser(usage = usage_string, option_list))
 
 
+source('src/functions.R')
 
 
 # Set to TRUE when running interactively for debugging, to set test opts
 if(FALSE) {
-    opt <- list(); 
-    opt$pgfile <- 'TEST/report.pg_matrix.tsv'
-    opt$outdir <- 'TEST'
-    opt$design <- 'TEST/design.tsv'
-    opt$log_base <- 10
-    opt$dry <- FALSE
-    opt$normalize <- 'shift'
+    opt <- list()
+    opt$pgfile <-  'ANXA11_redux/report.pg_matrix.tsv'
+    opt$design <-  'ANXA11_redux/design2.tsv'
+    opt$outdir <-  'ANXA11_redux/'
+    opt$sds <-  3
+    opt$normalize <-  'shift'
+    opt$log_base <-  2
+    #opt$exclude <-  'ANXA11_EMV_1;ANXA11_EMV_2;ANXA11_EMV_3;ANXA11_EMV_4'
     opt$fdr_threshold <- 0.05
-    opt$foldchange <- 5
+    opt$foldchange <- 10
     opt$minintensity <- 0
-    opt$neighbors <- 6
-    opt$sds <- 1
+    opt$neighbors <- 15
+    opt$sds <- 3
 }
 
 badargs <- FALSE
@@ -199,455 +215,6 @@ cat(paste0('INFO: LFC threshold of log[', opt$log_base, '](Intensity) > ', opt$l
 cat(paste0('INFO: FDR threshold of ', opt$fdr_threshold, '\n'))
 
 
-#### FUNCTIONS #####################################################################################
-tryTo <- function(infomsg='', cmd,  errormsg='ERROR: failed!') {
-    # tryTo is a simple tryCatch wrapper, taking a command + message.
-    # If the try block fails, an error is printed and R quits.
-    cat(paste0(infomsg, '\n'))
-    tryCatch(cmd, 
-        error = function(e){
-            cat(paste0(errormsg, '\n', e))
-            quit(status=1)
-        },
-        finally = cat('')
-    )
-}
-
-
-
-replace_NAs <- function(DT, sdcols, newvalue) {
-    # Within data.table `DT`, 
-    # for `sdcols` specified columns, 
-    # replaces all NA with `newvalue`
-    DT[, (sdcols) := lapply(.SD, function(x) {ifelse(is.na(x),newvalue,x)}), .SDcols=sdcols]
-}
-
-
-ezwrite <- function(x, output_dir, output_filename) {
-    # Wrapper for fwrite that uses standard TSV output defaults.
-    # Concatenates output directory and filename for final output location.
-    cat(paste0('   -> ', output_dir, output_filename, '\n'))
-    fwrite(x, file=paste0(output_dir, '/', output_filename),
-        quote=F,
-        row.names=F,
-        col.names=T,
-        sep='\t')
-    
-}
-
-
-standardize_format <- function(DT.original) {
-    # Accepts an input protein group intensity data.table, whether spectronaut or DIA-NN format,
-    # and restructures into one consistent style for downstream processing
-    DT <- copy(DT.original)
-    if("Protein.Ids" %in% colnames(DT)) {
-        DT[, 'Protein.Ids' := NULL]
-        DT[, 'Protein.Names' := NULL]
-        setnames(DT, 'Protein.Group', 'Protein_Group')
-        setnames(DT, 'First.Protein.Description', 'First_Protein_Description')
-    } else if('PG.ProteinGroups' %in% colnames(DT)) {
-        setnames(DT, 'PG.ProteinGroups', 'Protein_Groups')
-        setnames(DT, 'PG.Genes', 'Genes')
-        setnames(DT, 'PG.ProteinDescriptions', 'First_Protein_Description')
-        # Use only first protein description
-        DT[, 'First_Protein_Description' := tstrsplit(First_Protein_Description, split=';')[1]]
-    }
-
-    # Remove leading directories for sample names
-    # e.g. /path/to/sample1.mzML -> sample1.mzML
-    setnames(DT, basename(colnames(DT)))
-
-    # Remove trailing file extensions
-    extensions <- '.mzML$|.mzml$|.RAW$|.raw$|.dia$|.DIA$'
-    extension_samplenames <-  colnames(DT)[colnames(DT) %like% extensions]
-    trimmed_samplenames <- gsub(extensions, '', extension_samplenames)
-    setnames(DT, extension_samplenames, trimmed_samplenames)
-    return(DT[])
-}
-
-
-melt_intensity_table <- function(DT) {
-    # Converts intensity data.table to long format
-    info_cols <- c('Protein_Groups', 'Genes', 'First_Protein_Description')
-    DT.long <- melt(DT, 
-    measure.vars=colnames(DT[,-c(1:3)]),
-    variable.name='Sample',
-    value.name='Intensity')
-    return(DT.long)
-}
-
-
-plot_pg_counts <- function(DT, output_dir, output_filename) {
-    n_samples <- nrow(DT)
-    g <- ggplot(DT, aes(x=Sample, y=N)) +
-                geom_bar(stat='identity', position='dodge', aes(y=N)) +
-                geom_text(aes(label=N, y=N + (0.05*max(pgcounts$N)))) +
-                coord_flip() +
-                theme_few() +
-                labs(x='Sample', y=paste0('N Protein Groups where Log[', opt$log_base, '](Intensity)> 0'))
-    cat(paste0('   -> ', output_dir, output_filename, '\n'))
-   
-    ggsave(g,filename=paste0(output_dir, output_filename), width=20, height=2*n_samples, units='cm')
-}
-
-
-plot_pg_thresholds <- function(DT, output_dir, output_filename) {
-    # G
-    g <- ggplot(DT, aes(x=Threshold, y=N, color=Sample)) +
-            geom_line() +
-            geom_point(shape=21, alpha=0.5) +
-            theme_few() +
-            labs(x=paste0('Minimum Log[', opt$log_base, '](Intensity) Threshold'),
-            y=paste0('N Protein Groups where Log[', opt$log_base, '](Intensity)> 0')) 
-    cat(paste0('   -> ', output_dir, output_filename, '\n'))
-    ggsave(g,
-        filename=paste0(output_dir, output_filename),
-        width=20,
-        height=20,
-        units='cm'
-    )
-}
-
-
-plot_density <- function(DT.original, output_dir, output_filename) {
-    # Currently UNUSED as the beeswarm function serves the purpose well
-    DT <- copy(DT.original)
-    intensity_median <- median(DT[,Intensity])
-    n_samples <- length(unique(DT[,Sample]))
-    dat.quantiles <- DT[, list(
-                    'q025'=quantile(Intensity, 0.025),
-                    'q25'=quantile(Intensity, 0.25),
-                    'q50'=quantile(Intensity, 0.50),
-                    'q75'=quantile(Intensity, 0.75),
-                    'q975'=quantile(Intensity, 0.975)
-                    ), by=Sample]
-
-    dat.legend <- melt(dat.quantiles[which.min(as.numeric(Sample))], measure.vars=colnames(dat.quantiles[,-1]))
-    dat.legend[, qlabel := tstrsplit(variable, split='q')[2]]
-    dat.legend[, qlabel := paste0('0.', qlabel)]
-    dat.legend[, qlabel := as.numeric(qlabel)]
-
-    g <- ggplot(DT, linetype='solid', aes(x=Intensity)) +
-        geom_density(fill='gray80') +
-        theme_few() +
-        facet_grid(Sample~., switch='y') +
-        geom_vline(xintercept=intensity_median, color='red') +
-        geom_vline(data=dat.quantiles, linetype='solid',  alpha=0.7, aes(xintercept=q50))+
-        geom_vline(data=dat.quantiles, linetype='dashed', alpha=0.7,  aes(xintercept=q25))+
-        geom_vline(data=dat.quantiles, linetype='dashed', alpha=0.7,  aes(xintercept=q75))+
-        geom_vline(data=dat.quantiles, linetype='dotted', alpha=0.7,  aes(xintercept=q025))+
-        geom_vline(data=dat.quantiles, linetype='dotted', alpha=0.7,  aes(xintercept=q975))+
-        theme(strip.text.y.left = element_text(angle = 0, hjust=0.5, vjust=0.5)) +
-        theme(axis.text.y=element_blank(), axis.ticks.y=element_blank(), axis.title.y=element_blank()) +
-        labs(x=paste0('Log[', opt$log_base, '](Intensity)'), title='Intensity Distribution across Samples') +
-        geom_label(data=dat.legend, aes(x=value, y=0.285, label=qlabel)) +
-        theme(panel.border = element_blank()) +
-        ylim(0,0.3)
-    cat(paste0('   -> ', output_dir, output_filename, '\n'))
-    ggsave(g, 
-        filename=paste0(output_dir, output_filename),
-        height=2.5*n_samples,
-        width=30,
-        units='cm'
-    )
-}
-
-
-shift_normalize_intensity <- function(DT.original) {
-    DT <- copy(DT.original)
-    # Get global median of intensity values
-    global_median <- median(DT[, Intensity])
-    DT[, 'sample_median' := median(Intensity), by=Sample]
-    DT[, 'global_median' := global_median]
-    DT[, 'NormInt' := Intensity - (sample_median - global_median)]
-    DT[, c('Intensity', 'sample_median', 'global_median') := NULL]
-    setnames(DT, 'NormInt', 'Intensity')
-    return(DT[])
-}
-
-
-scale_normalize_intensity <- function(DT.original) {
-    DT <- copy(DT.original)
-    # Get global median of intensity values
-    global_median <- median(DT[, Intensity])
-    DT[, 'sample_median' := median(Intensity), by=Sample]
-    DT[, 'global_median' := global_median]
-    DT[, 'NormInt' := Intensity * (global_median / sample_median)]
-    DT[, c('Intensity', 'sample_median', 'global_median') := NULL]
-    setnames(DT, 'NormInt', 'Intensity')
-    return(DT[])
-}
-
-
-plot_flip_beeswarm <- function(DT, output_dir, output_filename, plot_title) {
-    n_samples <- length(unique(DT$Sample))
-    intensity_median <- median(DT[, Intensity])
-    dat.quantiles <- DT[, list(
-                'q025'=quantile(Intensity, 0.025),
-                'q25'=quantile(Intensity, 0.25),
-                'q50'=quantile(Intensity, 0.50),
-                'q75'=quantile(Intensity, 0.75),
-                'q975'=quantile(Intensity, 0.975)
-                ), by=Sample]
-
-    dat.legend <- melt(dat.quantiles[which.min(as.numeric(Sample))], measure.vars=colnames(dat.quantiles[,-1]))
-    dat.legend[, qlabel := tstrsplit(variable, split='q')[2]]
-    dat.legend[, qlabel := paste0('0.', qlabel)]
-    dat.legend[, qlabel := as.numeric(qlabel)]
-
-    g <- ggplot(DT, aes(x=0, y=Intensity)) +
-        geom_beeswarm(alpha=0.5, shape=21) +
-        facet_grid(.~Sample, switch='x') +
-        theme_few() +
-        geom_hline(data=dat.quantiles, color='gray50', linetype='solid',  alpha=0.7, aes(yintercept=q50))+
-        geom_hline(data=dat.quantiles, color='gray50', linetype='dashed', alpha=0.7,  aes(yintercept=q25))+
-        geom_hline(data=dat.quantiles, color='gray50', linetype='dashed', alpha=0.7,  aes(yintercept=q75))+
-        geom_hline(data=dat.quantiles, color='gray50', linetype='dotted', alpha=0.7,  aes(yintercept=q025))+
-        geom_hline(data=dat.quantiles, color='gray50', linetype='dotted', alpha=0.7,  aes(yintercept=q975))+
-        theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
-        labs(title=plot_title, x='Sample', y=paste0('Log[', opt$log_base, '](Intensity)')) +
-        theme(strip.text.x.bottom = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
-        scale_y_continuous(position='right') +
-        theme(axis.text.y.right=element_text(angle=90, hjust=0.5)) +
-        theme(axis.title.x.bottom = element_text(angle = 180, hjust=0.5, vjust=0.5)) +
-        theme(axis.title.y.right = element_text(angle = 90, hjust=0.5, vjust=0.5)) +
-        geom_hline(yintercept=intensity_median, color='red', linetype='dashed', alpha=1)
-    ggsave(g, filename='.beeswarm.tmp.png', height=15, width=2*n_samples, units='cm')
-    tmpimage <- image_read('.beeswarm.tmp.png')
-    cat(paste0('   -> ', output_dir, output_filename, '\n'))
-    image_rotate(tmpimage, 90) %>% image_write(paste0(output_dir, output_filename))
-    invisible(file.remove('.beeswarm.tmp.png')) # invisible suppresses 'TRUE' being printed
-
-}
-
-
-plot_correlation_heatmap <- function(DT.corrs, output_dir, output_filename) {
-    n_samples <- length(unique(DT.corrs[,SampleA]))
-    max_limit <- max(DT.corrs$Spearman)
-    min_limit <- min(DT.corrs$Spearman)
-    mid_limit <- as.numeric(format(((max_limit + min_limit) / 2), digits=3))
-    g <- ggplot(DT.corrs, aes(x=SampleA, y=SampleB, fill=Spearman, label=Spearman)) +
-    geom_tile() +
-    geom_text(color='gray10') + 
-    theme_few() +
-    scale_fill_gradient2(low = "skyblue", high = "tomato1", mid = "white", 
-                        midpoint = mid_limit, limit = c(min_limit,max_limit),
-                        space = "Lab", breaks=c(min_limit, mid_limit, max_limit),
-                        name="Spearman\nCorrelation\n") +
-    theme(axis.text.x=element_text(angle=45, hjust=1)) +
-    theme(axis.title.x=element_blank(), axis.title.y=element_blank())
-    cat(paste0('   -> ', output_dir, output_filename, '\n'))
-    ggsave(g,
-    filename=paste0(output_dir, output_filename),
-    height=1.2*n_samples,
-    width=2*n_samples,
-    units='cm')
-
-}
-
-
-get_spearman <- function(DT.original) {
-    DT <- copy(DT.original)
-    #### Pairwise correlations between sample columns
-    dt.samples <- DT[,-c(1:3)]     # Ignore info columns (subset to only intensity values)
-    dt.corrs <- cor(as.matrix(na.omit(dt.samples)), method='spearman')  
-
-    # Convert to lower triangle only
-    # (no need for full correlation matrix with diagonal or repeated comparisons)
-    dt.corrs[lower.tri(dt.corrs, diag=T)] <- NA
-    dt.corrs <- as.data.table(dt.corrs, keep.rownames=T)
-    lvls <- dt.corrs[,rn]
-    dt.corrs <- melt(dt.corrs, measure.vars=dt.corrs[,rn], value.name='Spearman')
-    dt.corrs <- dt.corrs[! is.na(Spearman)]
-    setnames(dt.corrs, c('rn', 'variable'), c('SampleA','SampleB'))
-
-    # Format correlations as 3 digits
-    dt.corrs[, Spearman := as.numeric(format(Spearman, digits=3))]
-
-    # Adjust levels such that both axes plot samples in the same order
-    dt.corrs[, SampleA := factor(SampleA, levels=lvls)]
-    dt.corrs[, SampleB := factor(SampleB, levels=lvls)]
-    return(dt.corrs[])
-}
-
-get_pearson_matrix <- function(DT.original) {
-    DT <- copy(DT.original)
-    #### Pairwise correlations between sample columns
-    dt.samples <- DT[,-c(1:3)]     # Ignore info columns (subset to only intensity values)
-    dt.corrs <- cor(as.matrix(na.omit(dt.samples)), method='pearson')  
-
-    dt.corrs <- as.data.table(dt.corrs, keep.rownames=T)
-    #dt.corrs <- melt(dt.corrs, measure.vars=dt.corrs[,rn], value.name='Spearman')
-    #dt.corrs <- dt.corrs[! is.na(Spearman)]
-    #setnames(dt.corrs, c('rn', 'variable'), c('SampleA','SampleB'))
-
-    # Format correlations as 3 digits
-    dt.corrs[, Spearman := as.numeric(format(Spearman, digits=3))]
-
-    # Adjust levels such that both axes plot samples in the same order
-    dt.corrs.levels <- sort(as.character(unique(dat.long$Sample)))
-    dt.corrs[, SampleA := factor(SampleA, levels=dt.corrs.levels)]
-    dt.corrs[, SampleB := factor(SampleB, levels=dt.corrs.levels)]
-    return(dt.corrs[])
-}
-
-
-get_PCs <- function(DT.intensity, DT.design) {
-    out <- list()
-    # Formatting prior to running PCA
-    cluster.dat <- copy(DT.intensity[,-c(1:3)]) 
-    samplenames <- colnames(cluster.dat)
-    replace_NAs(cluster.dat, samplenames, 0)    # Replace NA values with 0
-    cluster.dat[, 'N_notzero' := apply(.SD, 1, function(x) sum(x!=0)), .SDcols=samplenames]
-    cluster.dat <- cluster.dat[N_notzero!=0][,-c(1:3)]
-
-    cluster.dat <- t(cluster.dat)                       # Transpose before PCA
-    pca <- prcomp(cluster.dat, center = TRUE, scale. = TRUE)
-
-    # Format summary output
-    out$summary <- as.data.table(t(summary(pca)$importance), keep.rownames=T)
-    setnames(out$summary, c('component','stdv','percent','cumulative'))
-
-    # Format PCA output
-    pca <- as.data.frame(pca$x)
-    pca <- setDT(pca, keep.rownames=T)[]
-    setnames(pca, 'rn', 'Sample')
-
-    # Merge in design matrix to add 'condition' column
-    out$components <- merge(pca, DT.design, by.x= 'Sample', by.y='sample_name')
-    return(out)
-}
-
-
-plot_PCs <- function(PCA, output_dir, output_filename) {
-    # Get % explained from PCA$summary table for PC1 and PC2
-    pc1_label <- as.character(format(100*PCA$summary[component=='PC1', 'percent'], digits=3))
-    pc1_label <- paste0('PC1: ', pc1_label, '%')
-
-    pc2_label <- as.character(format(100*PCA$summary[component=='PC2', 'percent'], digits=3))
-    pc2_label <- paste0('PC2: ', pc2_label, '%')
-
-    # Plot with 95% CI ellipse
-    g <- ggplot(PCA$components, aes(x=PC1, y=PC2, color=condition)) +
-        geom_point() +
-        stat_ellipse(level=0.95) +
-        theme_few() +
-        labs(x=pc1_label, y=pc2_label)
-
-    cat(paste0('   -> ', output_dir, output_filename, '\n'))
-    ggsave(g,filename=paste0(output_dir, output_filename), width=18, height=18, units='cm')
-}
-
-
-plot_hierarchical_cluster <- function(DT, output_dir, output_filename) {
-    dist_mat <- dist(t(DT[,-c(1:3)]))
-    n <- ncol(DT)-3
-    hc <- hclust(dist_mat, method = "complete")
-    g <- ggdendrogram(hc, rotate=TRUE) + labs(title='Hierarchical clustering')
-
-    cat(paste0('   -> ', output_dir, output_filename, '\n'))
-    ggsave(g, filename=paste0(output_dir, output_filename), height=n, width=15, units='cm')
-}
-
-
-get_umap <- function(DT.original, neighbors) {
-    DT <- t(DT.original[,-c(1:3)])
-    set.seed(100)
-    DT.umap <- umap(DT, n_neighbors=neighbors)
-    DT.out <- as.data.table(DT.umap$layout, keep.rownames=TRUE)
-    setnames(DT.out, c('Sample', 'UMAP1', 'UMAP2'))
-    DT.out <- merge(DT.out, design, by.x='Sample', by.y='sample_name')
-    return(DT.out[])
-}
-
-
-plot_umap <- function(DT, output_dir, output_filename) {
-    g <- ggplot(DT, aes(x=UMAP1, y=UMAP2, color=condition)) +
-    geom_point() +
-    theme_few() 
-    cat(paste0('   -> ', output_dir, output_filename, '\n'))
-    ggsave(g, filename=paste0(output_dir, output_filename), height=15, width=20, units='cm')
-}
-
-# filter_pgs <- function(DT.all, treatment_sample_names, treatment, control)  {
-#     control_sample_names <- colnames(DT.all)[colnames(DT.all) %like% control]
-#     n_treatment <- length(treatment_sample_names)
-#     n_controls <- length(control_sample_names)
-
-#     info_cols <- colnames(DT.all)[1:3]
-#     DT <- DT.all[, c(info_cols, treatment_sample_names, control_sample_names), with=F]
-
-#     # Filter: protein groups with at least half of control and treatment samples having non-zero value
-#     DT[, 'N_missing_treatment' := apply(.SD, 1, function(x) sum(x==0)), .SDcols=c(treatment_sample_names)]
-#     DT[, 'N_missing_control' := apply(.SD, 1, function(x) sum(x==0)), .SDcols=c(control_sample_names)]
-#     DT <- DT[N_missing_treatment < (n_treatment/2)]
-#     DT <- DT[N_missing_control < (n_controls/2)]
-#     DT[, 'N_missing_treatment' := NULL]
-#     DT[, 'N_missing_control' := NULL]
-#     return(DT[])
-# }
-
-run_contrast <- function(DT.all, treatment_sample_names, treatment, control)  {
-    control_sample_names <- colnames(DT.all)[colnames(DT.all) %like% control]
-    n_treatment <- length(treatment_sample_names)
-    n_controls <- length(control_sample_names)
-
-    info_cols <- colnames(DT.all)[1:3]
-    DT <- DT.all[, c(info_cols, treatment_sample_names, control_sample_names), with=F]
-
-    # Filter: protein groups with at least half of control and treatment samples having non-zero value
-    DT[, 'N_missing_treatment' := apply(.SD, 1, function(x) sum(x==0)), .SDcols=c(treatment_sample_names)]
-    DT[, 'N_missing_control' := apply(.SD, 1, function(x) sum(x==0)), .SDcols=c(control_sample_names)]
-    DT <- DT[N_missing_treatment < (n_treatment/2)]
-    DT <- DT[N_missing_control < (n_controls/2)]
-    DT.out <- copy(DT[, info_cols, with=F])
-    DT <- DT[, c(treatment_sample_names, control_sample_names), with=F]
-
-    # Run contrast
-    pvalue <- apply(DT, 1, function(x) {
-                                a = factor(c(rep(treatment, n_treatment), rep(control, n_controls)),
-                                    levels=c(treatment, control))
-                                fvalue = var.test(x~a)
-                                if (!is.na(fvalue$p.value)){
-                                    if (fvalue$p.value > 0.05) {
-                                        t.test(x~a, var.equal = TRUE)
-                                    } else {
-                                        t.test(x~a, var.equal = FALSE)
-                                    }
-                                }
-        }
-    )
-
-    DT.out[, p := as.numeric(unlist(lapply(pvalue,function(x) x$p.value)))]
-    DT.out[, q := p.adjust(p, method='BH', n=.N)]       # BH method to convert P to FDR (q) value
-    DT.out[, ratio := as.numeric(unlist(lapply(pvalue,function(x) x$estimate[1]/(x$estimate[2])))) ]
-    return(DT.out[])
-}
-
-
-plot_volcano <- function(DT.original, treatment, control, log_base, lfc_threshold, fdr_threshold, out_dir) {
-    DT <- copy(DT.original)
-    DT[, log_foldchange := log(ratio, base=log_base)]
-    log_lfc_threshold <- log(lfc_threshold, base=log_base)
-    log_fdr_threshold <- -1*log(fdr_threshold, base=log_base)
-    DT[, labeltext := '']
-    g <- ggplot(DT, aes(x=log_foldchange, y=-1*log10(q))) +
-        geom_point() +
-        theme_few() +
-        geom_label_repel(aes(label=labeltext)) +
-        geom_hline(yintercept=log_fdr_threshold, linetype='dashed', alpha=0.5) +
-        geom_vline(xintercept=log_lfc_threshold, linetype='dashed', alpha=0.5) +
-        geom_vline(xintercept=(-1*log_lfc_threshold), linetype='dashed', alpha=0.5) +
-        labs(x=paste0('Log[', opt$log_base, '](Intensity) fold change'),
-                y='-Log[10](q)',
-                title=paste0(treatment, ' vs ', control)
-        )
-    output_filename <- paste0(treatment, '-vs-', control, '.png')
-    cat(paste0('   -> ', out_dir, output_filename, '\n'))
-    ggsave(g, filename=paste0(out_dir, output_filename), height=16, width=16, units='cm')
-}
-
-
 #### MAKE DIRS #####################################################################################
 
 QC_dir <- paste0(opt$outdir, '/QC/')
@@ -674,11 +241,25 @@ tryTo(paste0('INFO: Reading input file ', opt$pgfile),{
     dat <- fread(opt$pgfile)
 }, paste0('ERROR: problem trying to load ', opt$pgfile, ', does it exist?'))
 
-
 tryTo(paste0('INFO: Massaging data from ', opt$pgfile, ' into a common style format for processing'), {
     dat <- standardize_format(dat)
 }, 'ERROR: failed! Check for missing/corrupt headers?')
 
+tryTo(paste0('INFO: Trimming extraneous column name info'), {
+    setnames(dat, trim_colnames(dat))
+}, 'ERROR: failed! Check for missing/corrupt headers?')
+
+
+# exclude samples in opt$exclude
+if (! is.null(opt$exclude)) {
+    opt$exclude <- strsplit(opt$exclude, split=';')[[1]]
+
+    tryTo(paste('INFO: excluding samples', opt$exclude),{
+    for(i in opt$exclude) {
+        dat[, (i) := NULL]
+    }
+}, paste0('ERROR: problem trying to load ', opt$pgfile, ', does it exist?'))
+}
 
 tryTo(paste0('INFO: Converting to long format'), {
     dat.long <- melt_intensity_table(dat)
@@ -758,7 +339,6 @@ tryTo('INFO: Replacing NA values with 0',{
 
 
 
-
 # pgcounts represents the distribution of Protein Groups with Intensity > 0
 # Visually, it is represented as a bar plot with x=sample, y=N, ordered by descending N
 # Get counts of [N=unique gene groups with `Intensity` > 0]
@@ -791,9 +371,18 @@ tryTo('INFO: Plotting sample intensity correlations',{
 }, 'ERROR: failed!')
 
 
-tryTo('INFO: Importing and validating experimental design\n',{
+tryTo('INFO: Importing experimental design',{
     design <- fread(opt$design, header=TRUE)
     setnames(design, c('sample_name', 'condition', 'control'))
+}, 'ERROR: failed!')
+
+if (!is.null(opt$exclude)) {
+    tryTo(paste('INFO: excluding samples', opt$exclude),{
+        design <- design[! sample_name %in% opt$exclude]
+    }, 'ERROR: failed!')
+}
+
+tryTo('INFO: Validating experimental design',{
     print(design[])
     cat('\n')
     conditions <- unique(design$condition)
@@ -874,15 +463,26 @@ tryTo('INFO: running UMAP',{
 
 
 #### DIFFERENTIAL INTENSITY ########################################################################
-tryTo('INFO: Running differential intensity contrasts',{
+
+tryTo('INFO: Re-generating raw intensities from normalized log values for T-test',{
+    # Transform from log to linear
+    dat.raw <- convert_log_to_raw(dat, opt$log_base)
+    # Convert 1 back to 0
+    replace_values(dat.raw, colnames(dat.raw[,-c(1:3)]), 1, 0)
+}, 'ERROR: failed!')
+
+tryTo('INFO: Running differential intensity t-tests',{
     for (treatment in conditions) {
         treatment_sample_names <- intersect(colnames(dat), design[condition == treatment, sample_name])
+        if (length(treatment_sample_names)==0) {next}
         control <- unique(design[condition == treatment, control])
         control_sample_names <- colnames(dat)[colnames(dat) %like% control]
-        
-        contrast <- run_contrast(dat, treatment_sample_names, treatment, control)
-        ezwrite(contrast, DI_dir, paste0(treatment, '-vs-', control, '.tsv'))
-        plot_volcano(contrast, treatment, control, opt$log_base, opt$lfc_threshold, opt$fdr_threshold, DI_dir)
+        if (length(control_sample_names)==0) {next}
+        if(treatment != control) {
+            t_test <- do_t_test(dat.raw, treatment_sample_names, control_sample_names)
+            ezwrite(t_test[order(p.adj)], DI_dir, paste0(treatment, '-vs-', control, '.tsv'))
+            plot_volcano(t_test, treatment, control, opt$log_base, opt$lfc_threshold, opt$fdr_threshold, DI_dir, opt$labelgene)
+        }
     }
 }, 'ERROR: failed!')
 
@@ -892,63 +492,3 @@ quit()
 # Evaluate normalization with samples from very different batches?
 # Calculate differential intensities using DESeq2?
 # Function to compare q-values from spectronaut VS DIA-NN?
-
-
-
-
-
-
-
-
-
-
-
-
-
-# options(ggrepel.max.overlaps=Inf)
-# vol_plot=result_ttest
-# vol_plot$Group <- "Others"
-# vol_plot$Group[which(vol_plot$log2FC >= opt$lfc_threshold)] <-"UP"
-# vol_plot$Group[which(vol_plot$log2FC <= -opt$lfc_threshold)] <-"DOWN"
-# vol_plot$Group[which(vol_plot$adj.Pvalue >= fdr_cutoff)]<- "Others"
-# up_gene_5 <- vol_plot[which(vol_plot$Group=="UP"),]
-# up_gene_5 <- up_gene_5[order(up_gene_5$log2FC,decreasing = T)[1:5],]
-# down_gene_5 <- vol_plot[which(vol_plot$Group=="DOWN"),]
-# down_gene_5 <- down_gene_5[order(down_gene_5$log2FC,decreasing = F)[1:5],]
-# top5_gene <- rbind(up_gene_5,down_gene_5)
-# top5_gene <- top5_gene[!duplicated(top5_gene$Genes),]
-# }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# p=ggplot(vol_plot, aes(x = log2FC, y = -log10(adj.Pvalue))) +
-#     geom_point(aes(color = Group)) +
-#     scale_color_manual(values = c("blue", "grey","red"))  +
-#     theme_bw(base_size = 12) + theme(legend.position = "bottom") +
-#     geom_label_repel(
-#     data = subset(top5_gene),
-#     aes(label = Genes),
-#     size = 5,
-#     box.padding = unit(0.35, "lines"),
-#     point.padding = unit(0.3, "lines"))+
-#     geom_hline(yintercept=-log10(fdr_cutoff), linetype="dashed")+ 
-#     #geom_vline(xintercept=lfc_cutoff, linetype="dashed")+ 
-#     #geom_vline(xintercept=-lfc_cutoff, linetype="dashed")+
-#     theme_classic()
-
-#     ggsave(file = paste0(out_dir,i,"_",unique(design$control[which(design$condition==i)]),"_top10_fdr0.05_fc1.5_vocal.pdf"),plot = p,width = 8,height = 8)
-

@@ -178,7 +178,3 @@ cat <(find ANXA11_redux | grep raw) > ${filelist}
 nfiles=$(wc -l ${filelist} | awk '{print $1}')
 sbatch --array=1-${nfiles} src/pwiz-convert-array.sh ${filelist}
 ```
-
-## New Section
-sbatch src/diann.sh --cfg nate-config.txt
-sbatch src/diann.sh --cfg HREC-config.txt

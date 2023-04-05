@@ -36,9 +36,11 @@ src/diann.sh --cfg config.txt
 
 ```bash
 src/analyze.sh --pgfile TEST/report.pg_matrix.tsv --design TEST/design.tsv --out TEST/
-
 ```
 
+<details><summary>Samples for Allison's CARD challenge</summary>
+
+```bash
 # WITH EMV samples, EMV as control
 src/analyze.sh \
     --pgfile ANXA11/DIANN_PGs_with_EMV.tsv \
@@ -49,7 +51,6 @@ src/analyze.sh \
     --base 2 \
     --labelgene ANXA11
 
-
 # WITH EMV samples, WT as control
 src/analyze.sh \
     --pgfile ANXA11/DIANN_PGs_with_EMV.tsv \
@@ -59,7 +60,6 @@ src/analyze.sh \
     --normalize shift \
     --base 2 \
     --labelgene ANXA11
-
 
 # WITHOUT EMV samples, WT as control
 src/analyze.sh \
@@ -101,7 +101,6 @@ src/analyze.sh \
     --base 2 \
     --labelgene ANXA11
 
-
 # Neurons, 140 as control
 src/analyze.sh \
     --pgfile ANXA11/neurons/neurons.tsv \
@@ -121,11 +120,9 @@ src/analyze.sh \
     --normalize shift \
     --base 2 \
     --labelgene ANXA11
+```
 
-
-spectronaut_DIA='ANXA11_spectronaut/ANXA11_Protein_Intensity.csv'
-DIANN_with_EMV='ANXA11_DIANN/report.pg_matrix.tsv'
-DIANN_no_EMV='ANXA11_DIANN_no_EMV/report.pg_matrix.tsv'
+</details>
 
 ## Converting Mass Spec file formats
 
@@ -138,14 +135,13 @@ Converting a single file:
 src/pwiz-convert /path/to/your/MassSpecFile.raw
 ```
 
-
-
-<details><summary>Additional Details</summary>
-
 Mass spec file conversion is handled by ProteoWizard (via wine in a singularity container).
 A writable sandboxed version of the container (which is required to run ProteoWizard) was built
 and modified from a [docker image](docker://chambm/pwiz-skyline-i-agree-to-the-vendor-licenses) on
 March 02 2023. Steps were modified from [here](https://github.com/jspaezp/elfragmentador-data#setting-up-msconvert-on-singularity-).
+
+<details><summary>Building pwiz container</summary>
+
 
 ```bash
 # Build writable singularity sandbox image based on docker image
@@ -173,8 +169,6 @@ wine "$@"
 tar -czvf pwiz_sandbox.tar.gz pwiz_sandbox
 rclone copy pwiz_sandbox.tar.gz onedrive:/singularity       # upload archive to cloud
 ```
-
-
 </details>
 
 # Bulk convert raw to mzml

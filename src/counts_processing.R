@@ -61,7 +61,7 @@ option_list = list(
     make_option(
         "--sds",
         dest = 'sds',
-        default=1,
+        default=3,
         type='numeric',
         help=paste(
             'Filter out samples with protein group counts > N standard deviations from the mean.',

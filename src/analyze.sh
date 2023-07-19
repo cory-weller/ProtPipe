@@ -22,12 +22,11 @@ fi
 
 
 #### R ANALYSIS ####################################################################################
-r_version='r/4.0:1.3'
 r_sif="src/R.sif"
-r_sif_md5_desired='f09066e783273ac200291fa7428d3ec3'
+r_sif_md5_desired='b2dfd44423fd6bb3b808d6458d069d85'
 if [ ! -f "${r_sif}" ]; then
-    echo "INFO: Pulling ${r_sif} from remote library://wellerca/${r_version}" 
-    singularity pull ${r_sif} library://wellerca/${r_version}
+    echo "INFO: dowloading ${r_sif} from Onedrive"
+    wget -O "${r_sif}" 'https://onedrive.live.com/download?cid=77DD71E598E5B51B&resid=77DD71E598E5B51B%2125102&authkey=AN0z98P1vIOjxnk'
 else
     echo "INFO: ${r_sif} already exists, skipping download"
 fi

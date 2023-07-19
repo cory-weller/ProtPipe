@@ -62,7 +62,7 @@ From: ubuntu:focal
     R --no-echo -e "install.packages('BiocManager')"
     R --no-echo -e "BiocManager::install('org.Hs.eg.db')"
     R --no-echo -e "BiocManager::install('clusterProfiler')"
-    R --no-echo -e "BiocManager::install('STRINdb')"
+    R --no-echo -e "BiocManager::install('STRINGdb')"
     
     # Install python3.8 and pip3
     apt-get clean

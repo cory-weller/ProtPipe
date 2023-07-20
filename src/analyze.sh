@@ -23,10 +23,10 @@ fi
 
 #### R ANALYSIS ####################################################################################
 r_sif="src/R.sif"
-r_sif_md5_desired='b2dfd44423fd6bb3b808d6458d069d85'
+r_sif_md5_desired='5360384b914c94c97b0aa39eb334e7f0'
 if [ ! -f "${r_sif}" ]; then
     echo "INFO: dowloading ${r_sif} from Onedrive"
-    wget -O "${r_sif}" 'https://onedrive.live.com/download?cid=77DD71E598E5B51B&resid=77DD71E598E5B51B%2125102&authkey=AN0z98P1vIOjxnk'
+    wget -O "${r_sif}" 'https://onedrive.live.com/download?resid=77DD71E598E5B51B%2125156&authkey=!ACYXTqwaZOfpvAQ'
 else
     echo "INFO: ${r_sif} already exists, skipping download"
 fi

@@ -27,11 +27,12 @@ r_sif_sha256_desired='cfab1ee7f61e2af5dff7b832ce28768ce5df2ab949c482a5bd94a91383
 if [ ! -f "${r_sif}" ]; then
     echo "INFO: pulling image from Singularity cloud"
     singularity pull --arch amd64 library://wellerca/r/4.0:sha256.cfab1ee7f61e2af5dff7b832ce28768ce5df2ab949c482a5bd94a91383423bb5
+    mv 4.0_sha256.cfab1ee7f61e2af5dff7b832ce28768ce5df2ab949c482a5bd94a91383423bb5.sif "${r_sif}"
 else
     echo "INFO: ${r_sif} already exists, skipping download"
 fi
 
-r_sif_sha256_actual=$(md5sum "${r_sif}" | awk '{print $1}')
+r_sif_sha256_actual=$(sha256sum "${r_sif}" | awk '{print $1}')
 
 if [ ! "${r_sif_sha256_actual}" == "${r_sif_sha256_desired}" ]; then
     echo "ERROR: ${r_sif} sha256sum does not pass check. Possibly corrupted? Delete or clear singularity cache and try again."

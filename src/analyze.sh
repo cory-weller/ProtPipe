@@ -23,21 +23,21 @@ fi
 
 #### R ANALYSIS ####################################################################################
 r_sif="src/R.sif"
-r_sif_md5_desired='5360384b914c94c97b0aa39eb334e7f0'
+r_sif_sha256_desired='cfab1ee7f61e2af5dff7b832ce28768ce5df2ab949c482a5bd94a91383423bb5'
 if [ ! -f "${r_sif}" ]; then
-    echo "INFO: dowloading ${r_sif} from Onedrive"
-    wget -O "${r_sif}" 'https://onedrive.live.com/download?resid=77DD71E598E5B51B%2125156&authkey=!ACYXTqwaZOfpvAQ'
+    echo "INFO: pulling image from Singularity cloud"
+    singularity pull --arch amd64 library://wellerca/r/4.0:sha256.cfab1ee7f61e2af5dff7b832ce28768ce5df2ab949c482a5bd94a91383423bb5
 else
     echo "INFO: ${r_sif} already exists, skipping download"
 fi
 
-r_sif_md5_actual=$(md5sum "${r_sif}" | awk '{print $1}')
+r_sif_sha256_actual=$(md5sum "${r_sif}" | awk '{print $1}')
 
-if [ ! "${r_sif_md5_actual}" == "${r_sif_md5_desired}" ]; then
-    echo "ERROR: ${r_sif} md5 sum does not pass check. Possibly corrupted? Delete and try again."
+if [ ! "${r_sif_sha256_actual}" == "${r_sif_sha256_desired}" ]; then
+    echo "ERROR: ${r_sif} sha256sum does not pass check. Possibly corrupted? Delete or clear singularity cache and try again."
     exit 1
 else
-    echo "INFO: ${r_sif} md5 sum passes check"
+    echo "INFO: ${r_sif} sha256sum sum passes check"
 fi
 
 r_processing_script='src/counts_processing.R'

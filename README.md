@@ -1,6 +1,6 @@
 # README
 
-![workflow-image](src/workflow.png)
+![workflow-image](src/ProtPipe.png)
 
 This repository facilitates quick, simple, and reproducible access to Data Independent Acquisition (DIA) proteomics workflows with minimal command line experience.
 
@@ -32,97 +32,35 @@ sbatch src/diann.sh --cfg config.txt
 src/diann.sh --cfg config.txt
 ```
 
-# Processing protein intensity estimates
-
+# Post-analysis
+## Processing total protein intensity estimates
+The required documents are the csv or tsv file from the Spectronaut, design matrix csv file(example shown in folder example/design_matrix.csv).
 ```bash
 src/analyze.sh --pgfile TEST/report.pg_matrix.tsv --design TEST/design.tsv --out TEST/
 ```
 
-<details><summary>Samples for Allison's CARD challenge</summary>
+<details><summary>Samples for iPSCs neuron differentiation</summary>
 
 ```bash
-# WITH EMV samples, EMV as control
-src/analyze.sh \
-    --pgfile ANXA11/DIANN_PGs_with_EMV.tsv \
-    --design ANXA11/EMV_as_control.tsv \
-    --out ANXA11/with_EMV_vs_EMV \
-    --sds 4 \
-    --normalize shift \
-    --base 2 \
-    --labelgene ANXA11
-
-# WITH EMV samples, WT as control
-src/analyze.sh \
-    --pgfile ANXA11/DIANN_PGs_with_EMV.tsv \
-    --design ANXA11/WT_as_control.tsv \
-    --out ANXA11/with_EMV_vs_WT \
-    --sds 4 \
-    --normalize shift \
-    --base 2 \
-    --labelgene ANXA11
-
-# WITHOUT EMV samples, WT as control
-src/analyze.sh \
-    --pgfile ANXA11/DIANN_PGs_no_EMV.tsv \
-    --design ANXA11/WT_as_control.tsv \
-    --out ANXA11/no_EMV_vs_WT \
-    --sds 4 \
-    --normalize shift \
-    --base 2 \
-    --labelgene ANXA11
-
-# Original Spectronaut, WT as control
-src/analyze.sh \
-    --pgfile ANXA11/spectronaut/ANXA11_Protein_Intensity.csv \
-    --design ANXA11/WT_as_control.tsv \
-    --out ANXA11/spectronaut \
-    --sds 4 \
-    --normalize shift \
-    --base 2 \
-    --labelgene ANXA11
-
-# Neurons, A70 as control
-src/analyze.sh \
-    --pgfile ANXA11/neurons/neurons.tsv \
-    --design ANXA11/designs/neuron_vs_A70.tsv \
-    --out ANXA11/neurons \
-    --sds 4 \
-    --normalize shift \
-    --base 2 \
-    --labelgene ANXA11
-
-# Microglia, A70 as control
-src/analyze.sh \
-    --pgfile ANXA11/microglia/microglia.tsv \
-    --design ANXA11/designs/microglia_vs_A70.tsv \
-    --out ANXA11/microglia \
-    --sds 4 \
-    --normalize shift \
-    --base 2 \
-    --labelgene ANXA11
-
-# Neurons, 140 as control
-src/analyze.sh \
-    --pgfile ANXA11/neurons/neurons.tsv \
-    --design ANXA11/designs/neuron_vs_140.tsv \
-    --out ANXA11/neurons \
-    --sds 4 \
-    --normalize shift \
-    --base 2 \
-    --labelgene ANXA11
-
-# Microglia, 140 as control
-src/analyze.sh \
-    --pgfile ANXA11/microglia/microglia.tsv \
-    --design ANXA11/designs/microglia_vs_140.tsv \
-    --out ANXA11/microglia \
-    --sds 4 \
-    --normalize shift \
-    --base 2 \
-    --labelgene ANXA11
+# WITH differentiation neuron samples, Day0 as control
+Rscript src/counts_processing.R --pgfile iPSC_neuron/luke.csv --design iPSC_neuron/design_matrix_iPSC_neuron.csv --out iPSC_neuron/
 ```
 
 </details>
+
+## Processing AP-MS data analysis
+The required documents are the csv or tsv file from the Spectronaut, design matrix csv file(example shown in folder example/design_matrix.csv) and the gene name for the pulling down.
+```bash
+Rscript src/APMS.R --pgfile APMS/apms.csv --design APMS/design_matrix_apms.csv --out APMS/ --ip UNC13A
+```
+
+## Processing Immunopeptidome data analysis
+The required documents are the csv or tsv file from the FragPip, HLA_typing csv file(example shown in folder example/HLA_typing.csv).
+
+```bash
+Rscript src/Peptidome.R --pepfile peptidome/combined_peptide.tsv  --out peptidome/ --hla peptidome/HLA_typing.csv
+```
+
 
 ## Converting Mass Spec file formats
 
